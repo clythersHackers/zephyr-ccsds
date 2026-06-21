@@ -21,8 +21,7 @@ struct ccsds_profile_rf_tc {
 };
 
 int ccsds_profile_rf_tc_init(struct ccsds_profile_rf_tc *profile,
-                             struct ccsds_router *router,
-                             const struct ccsds_cltu_rx_config *cltu_cfg);
+                             struct ccsds_router *router);
 
 int ccsds_profile_rf_tc_push(struct ccsds_profile_rf_tc *profile,
                              const uint8_t *bytes, size_t len);

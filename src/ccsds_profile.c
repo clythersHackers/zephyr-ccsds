@@ -25,17 +25,15 @@ static int on_rf_tc_frame(const uint8_t *tc_frame, size_t tc_frame_len,
 }
 
 int ccsds_profile_rf_tc_init(struct ccsds_profile_rf_tc *profile,
-                             struct ccsds_router *router,
-                             const struct ccsds_cltu_rx_config *cltu_cfg)
+                             struct ccsds_router *router)
 {
-    if (!profile || !router || !cltu_cfg) {
+    if (!profile || !router) {
         return -EINVAL;
     }
 
     memset(profile, 0, sizeof(*profile));
     profile->router = router;
-    return ccsds_cltu_rx_init(&profile->cltu_rx, cltu_cfg, on_rf_tc_frame,
-                              profile);
+    return ccsds_cltu_rx_init(&profile->cltu_rx, on_rf_tc_frame, profile);
 }
 
 int ccsds_profile_rf_tc_push(struct ccsds_profile_rf_tc *profile,

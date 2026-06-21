@@ -3,18 +3,23 @@
 #include <errno.h>
 
 /* Single BCH(63,56) block decoder; CLTU framing stays above this layer. */
-int ccsds_bch_decode_block(uint8_t block[CCSDS_BCH_BLOCK_SIZE],
+int ccsds_bch_decode_block(const uint8_t block[CCSDS_BCH_BLOCK_SIZE],
+                           uint8_t data[CCSDS_BCH_DATA_SIZE],
                            int *corrected_bit)
 {
     uint8_t syndrome = 0u;
     bool odd_parity = false;
 
-    if (!block) {
+    if (!block || !data) {
         return -EINVAL;
     }
 
     if (corrected_bit) {
         *corrected_bit = -1;
+    }
+
+    for (int i = 0; i < CCSDS_BCH_DATA_SIZE; i++) {
+        data[i] = block[i];
     }
 
     for (int i = 0; i < 63; i++) {
@@ -42,7 +47,9 @@ int ccsds_bch_decode_block(uint8_t block[CCSDS_BCH_BLOCK_SIZE],
 
     for (int i = 0, single = 0x21; i < 63; i++) {
         if (syndrome == single) {
-            block[i / 8] ^= (uint8_t)(0x80u >> (i % 8));
+            if (i < 56) {
+                data[i / 8] ^= (uint8_t)(0x80u >> (i % 8));
+            }
             if (corrected_bit) {
                 *corrected_bit = i;
             }
