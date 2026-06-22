@@ -17,6 +17,10 @@ struct ccsds_rs_config {
     bool dual_basis;
 };
 
+#define CCSDS_RS_DATA_LEN 223u
+#define CCSDS_RS_PARITY_LEN 32u
+#define CCSDS_RS_CODEBLOCK_LEN (CCSDS_RS_DATA_LEN + CCSDS_RS_PARITY_LEN)
+
 int ccsds_rs_encode(const struct ccsds_rs_config *cfg,
                     const uint8_t *data, size_t data_len,
                     uint8_t *out, size_t out_cap, size_t *out_len);
