@@ -1,9 +1,7 @@
 #include "ccsds_rs.h"
 
-#include <errno.h>
 #include <string.h>
 #include <zephyr/sys/__assert.h>
-#include <zephyr/sys/util.h>
 
 #define CCSDS_RS_PARITY_LAST_INDEX (CCSDS_RS_PARITY_LEN - 1u)
 
@@ -53,14 +51,12 @@ static const uint8_t GG_LOG[32] = {
     0x97, 0xbe, 0x0d, 0xd5, 0xbe, 0x14, 0xef, 0xfb, 0xc5, 0x36, 0xef, 0x05, 0xc9, 0xbe, 0xc5, 0xd7
 };
 
-static void ccsds_rs_encode_block(const uint8_t data[CCSDS_RS_DATA_LEN],
-                                  uint8_t parity[CCSDS_RS_PARITY_LEN])
+static void ccsds_rs_encode_codeblock(const uint8_t *data, uint8_t *parity)
 {
     __ASSERT(data != NULL, "RS encoder data buffer is NULL");
     __ASSERT(parity != NULL, "RS encoder parity buffer is NULL");
 
-    // parity must be zero at the start
-    memset(parity, 0u, CCSDS_RS_PARITY_LEN);
+    memset(parity, 0, CCSDS_RS_PARITY_LEN);
 
     for (size_t i = 0u; i < CCSDS_RS_DATA_LEN; i++) {
         uint8_t feedback = data[i] ^ parity[CCSDS_RS_PARITY_LAST_INDEX];
@@ -75,44 +71,26 @@ static void ccsds_rs_encode_block(const uint8_t data[CCSDS_RS_DATA_LEN],
                     idx -= 255u;
                 }
 
-                parity[j] = parity[j - 1] ^ GF_ILOG[idx];
+                parity[j] = parity[j - 1u] ^ GF_ILOG[idx];
             }
 
             parity[0] = GF_ILOG[feedback_log];
             continue;
         }
 
-        /* feedback is zero, so just shift the parity array */
         memmove(parity + 1, parity, CCSDS_RS_PARITY_LAST_INDEX);
         parity[0] = 0u;
     }
 }
 
-int ccsds_rs_encode(const struct ccsds_rs_config *cfg,
-                    const uint8_t *data, size_t data_len,
-                    uint8_t *out, size_t out_cap, size_t *out_len)
+void ccsds_rs_encode(const uint8_t data[CCSDS_RS_INTERLEAVED_DATA_LEN],
+                     uint8_t parity[CCSDS_RS_INTERLEAVED_PARITY_LEN])
 {
-    if (!data || !out || !out_len) {
-        return -EINVAL;
+    __ASSERT(data != NULL, "RS encoder data buffer is NULL");
+    __ASSERT(parity != NULL, "RS encoder parity buffer is NULL");
+
+    for (size_t i = 0u; i < CCSDS_RS_INTERLEAVE_DEPTH; i++) {
+        ccsds_rs_encode_codeblock(data + (i * CCSDS_RS_DATA_LEN),
+                                  parity + (i * CCSDS_RS_PARITY_LEN));
     }
-
-    *out_len = 0u;
-
-    if (cfg && (cfg->interleave_depth > 1u || cfg->dual_basis)) {
-        return -ENOTSUP;
-    }
-
-    if (data_len != CCSDS_RS_DATA_LEN) {
-        return -EINVAL;
-    }
-
-    if (out_cap < CCSDS_RS_CODEBLOCK_LEN) {
-        return -ENOSPC;
-    }
-
-    memcpy(out, data, CCSDS_RS_DATA_LEN);
-    ccsds_rs_encode_block(data, out + CCSDS_RS_DATA_LEN);
-    *out_len = CCSDS_RS_CODEBLOCK_LEN;
-
-    return 0;
 }

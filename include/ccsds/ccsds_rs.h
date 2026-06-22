@@ -12,18 +12,21 @@
 extern "C" {
 #endif
 
-struct ccsds_rs_config {
-    uint8_t interleave_depth;
-    bool dual_basis;
-};
+#ifndef CONFIG_AKIRA_CCSDS_RS_INTERLEAVE_DEPTH
+#define CONFIG_AKIRA_CCSDS_RS_INTERLEAVE_DEPTH 5
+#endif
 
 #define CCSDS_RS_DATA_LEN 223u
 #define CCSDS_RS_PARITY_LEN 32u
 #define CCSDS_RS_CODEBLOCK_LEN (CCSDS_RS_DATA_LEN + CCSDS_RS_PARITY_LEN)
+#define CCSDS_RS_INTERLEAVE_DEPTH CONFIG_AKIRA_CCSDS_RS_INTERLEAVE_DEPTH
+#define CCSDS_RS_INTERLEAVED_DATA_LEN \
+    (CCSDS_RS_DATA_LEN * CCSDS_RS_INTERLEAVE_DEPTH)
+#define CCSDS_RS_INTERLEAVED_PARITY_LEN \
+    (CCSDS_RS_PARITY_LEN * CCSDS_RS_INTERLEAVE_DEPTH)
 
-int ccsds_rs_encode(const struct ccsds_rs_config *cfg,
-                    const uint8_t *data, size_t data_len,
-                    uint8_t *out, size_t out_cap, size_t *out_len);
+void ccsds_rs_encode(const uint8_t data[CCSDS_RS_INTERLEAVED_DATA_LEN],
+                     uint8_t parity[CCSDS_RS_INTERLEAVED_PARITY_LEN]);
 
 #ifdef __cplusplus
 }
