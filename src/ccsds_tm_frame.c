@@ -5,15 +5,59 @@
 
 #include <zephyr/sys/util.h>
 
+#include "ccsds_crc16.h"
+
+#ifdef CONFIG_AKIRA_CCSDS_RS
+#include "ccsds_rs.h"
+#endif
+
 #define CCSDS_TM_MAX_VC_ID 7u
 #define CCSDS_TM_VC_COUNT (CCSDS_TM_MAX_VC_ID + 1u)
 #define CCSDS_TM_ROUTE_COUNT 32u
 #define CCSDS_SPACE_PACKET_MIN_LEN (CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + 1u)
+#define CCSDS_TM_ASM_LEN 4u
+#define CCSDS_TM_PRIMARY_HDR_LEN 6u
+#define CCSDS_TM_OCF_LEN 4u
+#define CCSDS_TM_IDLE_VC_ID CCSDS_TM_MAX_VC_ID
+#define CCSDS_TM_IDLE_FIRST_HEADER_POINTER 0x7feu
+#define CCSDS_TM_SECONDARY_HEADER_FLAG 0u
+#define CCSDS_TM_SYNC_FLAG 0u
+#define CCSDS_TM_PACKET_ORDER_FLAG 0u
+#define CCSDS_TM_SEGMENT_LENGTH_ID 3u
+#define CCSDS_TM_ASM0 0x1au
+#define CCSDS_TM_ASM1 0xcfu
+#define CCSDS_TM_ASM2 0xfcu
+#define CCSDS_TM_ASM3 0x1du
+
+#ifdef CONFIG_AKIRA_CCSDS_RS
+#define CCSDS_TM_FRAME_LEN CCSDS_RS_INTERLEAVED_DATA_LEN
+#define CCSDS_TM_CODED_FRAME_LEN \
+    (CCSDS_TM_ASM_LEN + CCSDS_TM_FRAME_LEN + CCSDS_RS_INTERLEAVED_PARITY_LEN)
+#else
+#define CCSDS_TM_FRAME_LEN CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN
+#define CCSDS_TM_CODED_FRAME_LEN CCSDS_TM_FRAME_LEN
+#endif
+
+#ifdef CONFIG_AKIRA_CCSDS_TM_FECF
+#define CCSDS_TM_FECF_LEN CCSDS_CRC16_LEN
+#else
+#define CCSDS_TM_FECF_LEN 0u
+#endif
+
+BUILD_ASSERT(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID <= 0x3ff,
+             "CCSDS spacecraft ID must fit in 10 bits");
+BUILD_ASSERT(CCSDS_TM_FRAME_LEN <= CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN,
+             "configured TM frame workspace is smaller than generated frame");
+BUILD_ASSERT(CCSDS_TM_FRAME_LEN >
+                 (CCSDS_TM_PRIMARY_HDR_LEN + CCSDS_TM_OCF_LEN +
+                  CCSDS_TM_FECF_LEN),
+             "configured TM frame length is too small for TM overhead");
 
 struct ccsds_tm_vc {
     struct k_mutex write_lock;
     struct k_pipe pending;
     uint8_t pending_storage[CONFIG_AKIRA_CCSDS_TM_QUEUE_DEPTH];
+    size_t pending_len;
 
     uint16_t packet_rem;
     bool packet_is_idle;
@@ -30,8 +74,19 @@ struct ccsds_tm_route {
 static struct ccsds_tm_vc vcs[CCSDS_TM_VC_COUNT];
 static struct ccsds_tm_route routes[CCSDS_TM_ROUTE_COUNT];
 static uint8_t frame_buf[CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN];
+static uint8_t coded_frame_buf[CCSDS_TM_CODED_FRAME_LEN];
+static struct k_work_delayable generator_work;
+static struct k_mutex generator_lock;
+static k_timeout_t generator_active_delay;
+static k_timeout_t generator_idle_delay;
 static uint8_t mcfc;
+static uint8_t generator_last_vcid;
+static bool generator_work_initialized;
+static bool generator_running;
+static bool generator_last_cycle_active;
 static bool initialized;
+
+static void route_frame(uint8_t vcid, const uint8_t *frame, size_t frame_len);
 
 /* Return the total packet length encoded in the CCSDS primary header. */
 static size_t packet_total_len(const uint8_t *packet)
@@ -73,6 +128,160 @@ static uint8_t route_bit_index(ccsds_tm_route_mask_t route_bit)
     return bit_num;
 }
 
+static void write_be16(uint8_t *buf, uint16_t value)
+{
+    buf[0] = (uint8_t)(value >> 8);
+    buf[1] = (uint8_t)value;
+}
+
+static void build_primary_header(uint8_t *buf, uint8_t vcid)
+{
+    uint16_t word0;
+    uint16_t word2;
+
+    word0 = ((uint16_t)(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID & 0x3ffu) << 4) |
+            ((uint16_t)(vcid & 0x7u) << 1) | 0x1u;
+    word2 = ((uint16_t)(CCSDS_TM_SECONDARY_HEADER_FLAG & 0x1u) << 15) |
+            ((uint16_t)(CCSDS_TM_SYNC_FLAG & 0x1u) << 14) |
+            ((uint16_t)(CCSDS_TM_PACKET_ORDER_FLAG & 0x1u) << 13) |
+            ((uint16_t)(CCSDS_TM_SEGMENT_LENGTH_ID & 0x3u) << 11) |
+            (CCSDS_TM_IDLE_FIRST_HEADER_POINTER & 0x7ffu);
+
+    write_be16(&buf[0], word0);
+    buf[2] = mcfc;
+    buf[3] = vcs[vcid].vcfc;
+    write_be16(&buf[4], word2);
+}
+
+static size_t build_idle_transfer_frame(uint8_t vcid)
+{
+    size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
+                      CCSDS_TM_OCF_LEN - CCSDS_TM_FECF_LEN;
+    size_t ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + data_len;
+
+    memset(frame_buf, 0, CCSDS_TM_FRAME_LEN);
+    build_primary_header(frame_buf, vcid);
+
+#ifdef CONFIG_AKIRA_CCSDS_TM_FECF
+    uint16_t fecf;
+    size_t fecf_offset = CCSDS_TM_FRAME_LEN - CCSDS_TM_FECF_LEN;
+
+    fecf = ccsds_crc16_compute(frame_buf, fecf_offset);
+    write_be16(&frame_buf[fecf_offset], fecf);
+#endif
+
+    __ASSERT_NO_MSG(ocf_offset + CCSDS_TM_OCF_LEN + CCSDS_TM_FECF_LEN ==
+                    CCSDS_TM_FRAME_LEN);
+
+    mcfc++;
+    vcs[vcid].vcfc++;
+
+    return CCSDS_TM_FRAME_LEN;
+}
+
+static size_t code_transfer_frame(const uint8_t *frame, size_t frame_len)
+{
+#ifdef CONFIG_AKIRA_CCSDS_RS
+    uint8_t *parity = &coded_frame_buf[CCSDS_TM_ASM_LEN + frame_len];
+
+    __ASSERT_NO_MSG(frame_len == CCSDS_RS_INTERLEAVED_DATA_LEN);
+
+    coded_frame_buf[0] = CCSDS_TM_ASM0;
+    coded_frame_buf[1] = CCSDS_TM_ASM1;
+    coded_frame_buf[2] = CCSDS_TM_ASM2;
+    coded_frame_buf[3] = CCSDS_TM_ASM3;
+    memcpy(&coded_frame_buf[CCSDS_TM_ASM_LEN], frame, frame_len);
+    ccsds_rs_encode(frame, parity);
+
+    return CCSDS_TM_CODED_FRAME_LEN;
+#else
+    memcpy(coded_frame_buf, frame, frame_len);
+
+    return frame_len;
+#endif
+}
+
+static bool vc_has_pending_bytes(uint8_t vcid)
+{
+    struct ccsds_tm_vc *vc = &vcs[vcid];
+    bool has_pending;
+
+    k_mutex_lock(&vc->write_lock, K_FOREVER);
+    has_pending = vc->pending_len > 0u;
+    k_mutex_unlock(&vc->write_lock);
+
+    return has_pending;
+}
+
+static bool generator_select_active_vc(uint8_t *vcid)
+{
+    for (uint8_t i = 0u; i < ARRAY_SIZE(vcs); i++) {
+        if (vc_has_pending_bytes(i)) {
+            *vcid = i;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool generator_cycle(void)
+{
+    uint8_t vcid = 0u;
+    bool active = generator_select_active_vc(&vcid);
+
+    generator_last_cycle_active = active;
+    generator_last_vcid = active ? vcid : CCSDS_TM_IDLE_VC_ID;
+
+    if (!active) {
+        size_t frame_len = build_idle_transfer_frame(CCSDS_TM_IDLE_VC_ID);
+        size_t coded_len = code_transfer_frame(frame_buf, frame_len);
+
+        route_frame(CCSDS_TM_IDLE_VC_ID, coded_frame_buf, coded_len);
+    }
+
+    return active;
+}
+
+static void generator_work_handler(struct k_work *work)
+{
+    bool active;
+    bool running;
+    k_timeout_t next_delay;
+
+    ARG_UNUSED(work);
+
+    k_mutex_lock(&generator_lock, K_FOREVER);
+    running = generator_running;
+    k_mutex_unlock(&generator_lock);
+
+    if (!running) {
+        return;
+    }
+
+    active = generator_cycle();
+
+    k_mutex_lock(&generator_lock, K_FOREVER);
+    running = generator_running;
+    next_delay = active ? generator_active_delay : generator_idle_delay;
+    k_mutex_unlock(&generator_lock);
+
+    if (running) {
+        (void)k_work_schedule(&generator_work, next_delay);
+    }
+}
+
+static void generator_init_once(void)
+{
+    if (generator_work_initialized) {
+        return;
+    }
+
+    k_mutex_init(&generator_lock);
+    k_work_init_delayable(&generator_work, generator_work_handler);
+    generator_work_initialized = true;
+}
+
 /* Dispatch a complete TM frame through the callbacks selected by its VC mask. */
 static __maybe_unused void route_frame(uint8_t vcid, const uint8_t *frame,
                                        size_t frame_len)
@@ -106,7 +315,12 @@ static __maybe_unused void route_frame(uint8_t vcid, const uint8_t *frame,
 /* Reset TM VC queues, frame counters, and all route registration state. */
 int ccsds_tm_frame_init(void)
 {
+    generator_init_once();
+
+    (void)ccsds_tm_frame_stop();
+
     for (size_t i = 0u; i < ARRAY_SIZE(vcs); i++) {
+        vcs[i].pending_len = 0u;
         vcs[i].packet_rem = 0u;
         vcs[i].packet_is_idle = false;
         vcs[i].vcfc = 0u;
@@ -120,6 +334,10 @@ int ccsds_tm_frame_init(void)
     memset(routes, 0, sizeof(routes));
     memset(frame_buf, 0, sizeof(frame_buf));
     mcfc = 0u;
+    generator_active_delay = K_NO_WAIT;
+    generator_idle_delay = K_NO_WAIT;
+    generator_last_vcid = CCSDS_TM_MAX_VC_ID;
+    generator_last_cycle_active = false;
     initialized = true;
 
     return 0;
@@ -157,6 +375,68 @@ int ccsds_tm_frame_set_vc_route(uint8_t vcid, ccsds_tm_route_mask_t route_mask)
 
     return 0;
 }
+
+int ccsds_tm_frame_start(k_timeout_t active_delay, k_timeout_t idle_delay)
+{
+    generator_init_once();
+
+    __ASSERT(initialized, "ccsds_tm_frame_init() not called");
+
+    k_mutex_lock(&generator_lock, K_FOREVER);
+    generator_active_delay = active_delay;
+    generator_idle_delay = idle_delay;
+    generator_running = true;
+    k_mutex_unlock(&generator_lock);
+
+    (void)k_work_schedule(&generator_work, K_NO_WAIT);
+
+    return 0;
+}
+
+int ccsds_tm_frame_stop(void)
+{
+    generator_init_once();
+
+    k_mutex_lock(&generator_lock, K_FOREVER);
+    generator_running = false;
+    k_mutex_unlock(&generator_lock);
+
+    (void)k_work_cancel_delayable(&generator_work);
+
+    return 0;
+}
+
+#ifdef CONFIG_ZTEST
+bool ccsds_tm_frame_test_is_running(void)
+{
+    bool running;
+
+    generator_init_once();
+
+    k_mutex_lock(&generator_lock, K_FOREVER);
+    running = generator_running;
+    k_mutex_unlock(&generator_lock);
+
+    return running;
+}
+
+bool ccsds_tm_frame_test_run_cycle(k_timeout_t *next_delay, uint8_t *vcid)
+{
+    bool active;
+
+    active = generator_cycle();
+
+    if (next_delay != NULL) {
+        *next_delay = active ? generator_active_delay : generator_idle_delay;
+    }
+
+    if (vcid != NULL) {
+        *vcid = generator_last_vcid;
+    }
+
+    return active;
+}
+#endif /* CONFIG_ZTEST */
 
 /* Validate and enqueue one complete encoded Space Packet for the selected VC. */
 int ccsds_tm_frame_add(uint8_t vcid, const uint8_t *packet, size_t packet_len,
@@ -204,6 +484,7 @@ int ccsds_tm_frame_add(uint8_t vcid, const uint8_t *packet, size_t packet_len,
         }
 
         written += (size_t)ret;
+        vc->pending_len += (size_t)ret;
     }
 
     ret = 0;

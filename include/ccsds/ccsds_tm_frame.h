@@ -69,6 +69,27 @@ int ccsds_tm_frame_set_vc_route(uint8_t vcid,
                                 ccsds_tm_route_mask_t route_mask);
 
 /**
+ * @brief Start the internal TM frame generator service.
+ *
+ * This schedules the generator immediately. Follow-up generator cycles use
+ * @p active_delay after queued packet data is observed, or @p idle_delay when
+ * all VC queues are idle. This slice does not build TM frames yet.
+ *
+ * @param active_delay Delay after a packet-bearing generator cycle.
+ * @param idle_delay Delay after an idle generator cycle.
+ *
+ * @return 0 on success.
+ */
+int ccsds_tm_frame_start(k_timeout_t active_delay, k_timeout_t idle_delay);
+
+/**
+ * @brief Stop the internal TM frame generator service.
+ *
+ * @return 0 on success.
+ */
+int ccsds_tm_frame_stop(void);
+
+/**
  * @brief Admit one complete encoded CCSDS Space Packet into a VC queue.
  *
  * @param vcid Virtual channel ID, 0 through 7.
