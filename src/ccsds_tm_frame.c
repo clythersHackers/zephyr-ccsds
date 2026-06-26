@@ -6,6 +6,7 @@
 #include <zephyr/sys/util.h>
 
 #include "ccsds_crc16.h"
+#include "ccsds_space_packet.h"
 
 #ifdef CONFIG_AKIRA_CCSDS_RS
 #include "ccsds_rs.h"
@@ -20,10 +21,13 @@
 #define CCSDS_TM_OCF_LEN 4u
 #define CCSDS_TM_IDLE_VC_ID CCSDS_TM_MAX_VC_ID
 #define CCSDS_TM_IDLE_FIRST_HEADER_POINTER 0x7feu
+#define CCSDS_TM_NO_FIRST_HEADER_POINTER 0x7ffu
+#define CCSDS_TM_FIRST_HEADER_POINTER_START 0u
 #define CCSDS_TM_SECONDARY_HEADER_FLAG 0u
 #define CCSDS_TM_SYNC_FLAG 0u
 #define CCSDS_TM_PACKET_ORDER_FLAG 0u
 #define CCSDS_TM_SEGMENT_LENGTH_ID 3u
+#define CCSDS_TM_IDLE_APID CCSDS_APID_MAX
 #define CCSDS_TM_ASM0 0x1au
 #define CCSDS_TM_ASM1 0xcfu
 #define CCSDS_TM_ASM2 0xfcu
@@ -52,6 +56,9 @@ BUILD_ASSERT(CCSDS_TM_FRAME_LEN >
                  (CCSDS_TM_PRIMARY_HDR_LEN + CCSDS_TM_OCF_LEN +
                   CCSDS_TM_FECF_LEN),
              "configured TM frame length is too small for TM overhead");
+BUILD_ASSERT(CONFIG_AKIRA_CCSDS_TM_QUEUE_DEPTH >=
+                 CONFIG_AKIRA_CCSDS_TM_MAX_SPACE_PACKET_LEN,
+             "TM queue depth must hold one maximum TM Space Packet");
 
 struct ccsds_tm_vc {
     struct k_mutex write_lock;
@@ -59,7 +66,7 @@ struct ccsds_tm_vc {
     uint8_t pending_storage[CONFIG_AKIRA_CCSDS_TM_QUEUE_DEPTH];
     size_t pending_len;
 
-    uint16_t packet_rem;
+    size_t packet_rem;
     bool packet_is_idle;
 
     uint8_t vcfc;
@@ -134,7 +141,9 @@ static void write_be16(uint8_t *buf, uint16_t value)
     buf[1] = (uint8_t)value;
 }
 
-static void build_primary_header(uint8_t *buf, uint8_t vcid)
+/* Build the TM primary header using the already-latched frame counters. */
+static void build_primary_header(uint8_t *buf, uint8_t vcid,
+                                 uint16_t first_header_pointer)
 {
     uint16_t word0;
     uint16_t word2;
@@ -145,7 +154,7 @@ static void build_primary_header(uint8_t *buf, uint8_t vcid)
             ((uint16_t)(CCSDS_TM_SYNC_FLAG & 0x1u) << 14) |
             ((uint16_t)(CCSDS_TM_PACKET_ORDER_FLAG & 0x1u) << 13) |
             ((uint16_t)(CCSDS_TM_SEGMENT_LENGTH_ID & 0x3u) << 11) |
-            (CCSDS_TM_IDLE_FIRST_HEADER_POINTER & 0x7ffu);
+            (first_header_pointer & 0x7ffu);
 
     write_be16(&buf[0], word0);
     buf[2] = mcfc;
@@ -153,15 +162,9 @@ static void build_primary_header(uint8_t *buf, uint8_t vcid)
     write_be16(&buf[4], word2);
 }
 
-static size_t build_idle_transfer_frame(uint8_t vcid)
+/* Append the optional TM FECF at the end of the transfer frame body. */
+static void append_fecf(void)
 {
-    size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
-                      CCSDS_TM_OCF_LEN - CCSDS_TM_FECF_LEN;
-    size_t ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + data_len;
-
-    memset(frame_buf, 0, CCSDS_TM_FRAME_LEN);
-    build_primary_header(frame_buf, vcid);
-
 #ifdef CONFIG_AKIRA_CCSDS_TM_FECF
     uint16_t fecf;
     size_t fecf_offset = CCSDS_TM_FRAME_LEN - CCSDS_TM_FECF_LEN;
@@ -169,14 +172,166 @@ static size_t build_idle_transfer_frame(uint8_t vcid)
     fecf = ccsds_crc16_compute(frame_buf, fecf_offset);
     write_be16(&frame_buf[fecf_offset], fecf);
 #endif
+}
+
+/* Advance master and selected virtual-channel frame counters after emit. */
+static void increment_frame_counters(uint8_t vcid)
+{
+    mcfc++;
+    vcs[vcid].vcfc++;
+}
+
+/*
+ * Fill remaining TM data bytes with one APID 2047 idle Space Packet when
+ * possible. If fewer than the minimum packet bytes remain, zero-fill the tail.
+ */
+static void fill_idle_space_packet(uint8_t *buf, size_t len)
+{
+    if (len < CCSDS_SPACE_PACKET_MIN_LEN) {
+        memset(buf, 0, len);
+        return;
+    }
+
+    write_be16(&buf[0], CCSDS_TM_IDLE_APID);
+    write_be16(&buf[2], ((uint16_t)CCSDS_SEQUENCE_UNSEGMENTED << 14));
+    write_be16(&buf[4],
+               (uint16_t)(len - CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN - 1u));
+    memset(&buf[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN], 0,
+           len - CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN);
+}
+
+/*
+ * Drain exactly len bytes from a VC pipe while keeping the mirror pending_len
+ * counter synchronized for deterministic generator selection.
+ */
+static int read_pending_bytes(struct ccsds_tm_vc *vc, uint8_t *buf, size_t len)
+{
+    size_t read_len = 0u;
+
+    while (read_len < len) {
+        int ret = k_pipe_read(&vc->pending, &buf[read_len],
+                              len - read_len, K_NO_WAIT);
+
+        if (ret < 0) {
+            return ret;
+        }
+
+        if (ret == 0) {
+            return -EIO;
+        }
+
+        read_len += (size_t)ret;
+        vc->pending_len -= (size_t)ret;
+    }
+
+    return 0;
+}
+
+/* Build a standalone idle frame for the configured idle VC. */
+static size_t build_idle_transfer_frame(uint8_t vcid)
+{
+    size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
+                      CCSDS_TM_OCF_LEN - CCSDS_TM_FECF_LEN;
+    size_t ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + data_len;
+
+    memset(frame_buf, 0, CCSDS_TM_FRAME_LEN);
+    build_primary_header(frame_buf, vcid, CCSDS_TM_IDLE_FIRST_HEADER_POINTER);
+    append_fecf();
 
     __ASSERT_NO_MSG(ocf_offset + CCSDS_TM_OCF_LEN + CCSDS_TM_FECF_LEN ==
                     CCSDS_TM_FRAME_LEN);
 
-    mcfc++;
-    vcs[vcid].vcfc++;
+    increment_frame_counters(vcid);
 
     return CCSDS_TM_FRAME_LEN;
+}
+
+/*
+ * Build one packet-bearing TM frame for a selected VC.
+ *
+ * The formatter owns all padding decisions. It first emits any unfinished
+ * packet continuation, then starts as many queued packets as will fit, and
+ * finally fills remaining data bytes with APID 2047 idle data. The first header
+ * pointer is set to the offset of the first packet start in this frame, or to
+ * 0x7ff when the frame contains continuation only and no packet starts.
+ */
+static int build_packet_transfer_frame(uint8_t vcid, size_t *frame_len)
+{
+    struct ccsds_tm_vc *vc = &vcs[vcid];
+    size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
+                      CCSDS_TM_OCF_LEN - CCSDS_TM_FECF_LEN;
+    size_t ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + data_len;
+    uint8_t *data = &frame_buf[CCSDS_TM_PRIMARY_HDR_LEN];
+    size_t used = 0u;
+    uint16_t first_header_pointer = CCSDS_TM_NO_FIRST_HEADER_POINTER;
+    int ret;
+
+    memset(frame_buf, 0, CCSDS_TM_FRAME_LEN);
+
+    k_mutex_lock(&vc->write_lock, K_FOREVER);
+
+    while (used < data_len && (vc->packet_rem > 0u || vc->pending_len > 0u)) {
+        size_t space = data_len - used;
+        size_t chunk_len;
+
+        if (vc->packet_rem > 0u) {
+            chunk_len = MIN((size_t)vc->packet_rem, space);
+            ret = read_pending_bytes(vc, &data[used], chunk_len);
+            if (ret != 0) {
+                goto out_unlock;
+            }
+
+            vc->packet_rem -= chunk_len;
+            used += chunk_len;
+            continue;
+        }
+
+        if (space < CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN) {
+            break;
+        }
+
+        if (vc->pending_len < CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN) {
+            ret = -EIO;
+            goto out_unlock;
+        }
+
+        if (first_header_pointer == CCSDS_TM_NO_FIRST_HEADER_POINTER) {
+            first_header_pointer = (uint16_t)used;
+        }
+
+        ret = read_pending_bytes(vc, &data[used],
+                                 CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN);
+        if (ret != 0) {
+            goto out_unlock;
+        }
+
+        vc->packet_rem = packet_total_len(&data[used]) -
+                         CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN;
+        used += CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN;
+    }
+
+    if (used < data_len) {
+        if (first_header_pointer == CCSDS_TM_NO_FIRST_HEADER_POINTER &&
+            data_len - used >= CCSDS_SPACE_PACKET_MIN_LEN) {
+            first_header_pointer = (uint16_t)used;
+        }
+        fill_idle_space_packet(&data[used], data_len - used);
+    }
+
+    build_primary_header(frame_buf, vcid, first_header_pointer);
+    append_fecf();
+
+    __ASSERT_NO_MSG(ocf_offset + CCSDS_TM_OCF_LEN + CCSDS_TM_FECF_LEN ==
+                    CCSDS_TM_FRAME_LEN);
+
+    increment_frame_counters(vcid);
+    *frame_len = CCSDS_TM_FRAME_LEN;
+    ret = 0;
+
+out_unlock:
+    k_mutex_unlock(&vc->write_lock);
+
+    return ret;
 }
 
 static size_t code_transfer_frame(const uint8_t *frame, size_t frame_len)
@@ -207,7 +362,7 @@ static bool vc_has_pending_bytes(uint8_t vcid)
     bool has_pending;
 
     k_mutex_lock(&vc->write_lock, K_FOREVER);
-    has_pending = vc->pending_len > 0u;
+    has_pending = vc->pending_len > 0u || vc->packet_rem > 0u;
     k_mutex_unlock(&vc->write_lock);
 
     return has_pending;
@@ -238,6 +393,14 @@ static bool generator_cycle(void)
         size_t coded_len = code_transfer_frame(frame_buf, frame_len);
 
         route_frame(CCSDS_TM_IDLE_VC_ID, coded_frame_buf, coded_len);
+    } else {
+        size_t frame_len;
+
+        if (build_packet_transfer_frame(vcid, &frame_len) == 0) {
+            size_t coded_len = code_transfer_frame(frame_buf, frame_len);
+
+            route_frame(vcid, coded_frame_buf, coded_len);
+        }
     }
 
     return active;
@@ -452,6 +615,10 @@ int ccsds_tm_frame_add(uint8_t vcid, const uint8_t *packet, size_t packet_len,
 
     if (packet_total_len(packet) != packet_len) {
         return -EINVAL;
+    }
+
+    if (packet_len > CONFIG_AKIRA_CCSDS_TM_MAX_SPACE_PACKET_LEN) {
+        return -EMSGSIZE;
     }
 
     if (packet_len > CONFIG_AKIRA_CCSDS_TM_QUEUE_DEPTH) {
