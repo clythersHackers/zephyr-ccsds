@@ -232,7 +232,7 @@ static size_t build_idle_transfer_frame(uint8_t vcid)
 {
     size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
                       CCSDS_TM_OCF_LEN - CCSDS_TM_FECF_LEN;
-    size_t ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + data_len;
+    __maybe_unused size_t ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + data_len;
 
     memset(frame_buf, 0, CCSDS_TM_FRAME_LEN);
     build_primary_header(frame_buf, vcid, CCSDS_TM_IDLE_FIRST_HEADER_POINTER);
@@ -260,7 +260,7 @@ static int build_packet_transfer_frame(uint8_t vcid, size_t *frame_len)
     struct ccsds_tm_vc *vc = &vcs[vcid];
     size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
                       CCSDS_TM_OCF_LEN - CCSDS_TM_FECF_LEN;
-    size_t ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + data_len;
+    __maybe_unused size_t ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + data_len;
     uint8_t *data = &frame_buf[CCSDS_TM_PRIMARY_HDR_LEN];
     size_t used = 0u;
     uint16_t first_header_pointer = CCSDS_TM_NO_FIRST_HEADER_POINTER;
