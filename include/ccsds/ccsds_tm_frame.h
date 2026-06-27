@@ -69,6 +69,17 @@ int ccsds_tm_frame_set_vc_route(uint8_t vcid,
                                 ccsds_tm_route_mask_t route_mask);
 
 /**
+ * @brief Read the route mask currently used by a virtual channel.
+ *
+ * @param vcid Virtual channel ID, 0 through 7.
+ * @param route_mask Output pointer for the current VC route mask.
+ *
+ * @return 0 on success, or -EINVAL for an invalid VCID or NULL output pointer.
+ */
+int ccsds_tm_frame_get_vc_route(uint8_t vcid,
+                                ccsds_tm_route_mask_t *route_mask);
+
+/**
  * @brief Start the internal TM frame generator service.
  *
  * This schedules the generator immediately. Follow-up generator cycles use

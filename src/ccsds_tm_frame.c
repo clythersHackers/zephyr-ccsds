@@ -539,6 +539,21 @@ int ccsds_tm_frame_set_vc_route(uint8_t vcid, ccsds_tm_route_mask_t route_mask)
     return 0;
 }
 
+/* Read the current route mask for shell/status reporting and tests. */
+int ccsds_tm_frame_get_vc_route(uint8_t vcid,
+                                ccsds_tm_route_mask_t *route_mask)
+{
+    if (vcid > CCSDS_TM_MAX_VC_ID || route_mask == NULL) {
+        return -EINVAL;
+    }
+
+    __ASSERT(initialized, "ccsds_tm_frame_init() not called");
+
+    *route_mask = vcs[vcid].route_mask;
+
+    return 0;
+}
+
 int ccsds_tm_frame_start(k_timeout_t active_delay, k_timeout_t idle_delay)
 {
     generator_init_once();
