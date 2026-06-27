@@ -22,9 +22,28 @@ struct ccsds_tc_frame {
     size_t data_len;
 };
 
+/**
+ * @brief Decode a CCSDS TC transfer frame.
+ *
+ * @param buf Encoded TC transfer frame bytes.
+ * @param len Length of @p buf in bytes.
+ * @param frame Output decoded frame view.
+ *
+ * @return -ENOTSUP until TC frame decoding is implemented.
+ */
 int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
                           struct ccsds_tc_frame *frame);
 
+/**
+ * @brief Decode the Space Packet carried by a decoded TC frame.
+ *
+ * @param frame Decoded TC frame containing packet data.
+ * @param packet Output decoded Space Packet view. The payload points into
+ *        @p frame data.
+ *
+ * @return 0 on success, -EINVAL for invalid input, or a Space Packet decode
+ *         error.
+ */
 int ccsds_tc_frame_extract_packet(const struct ccsds_tc_frame *frame,
                                   struct ccsds_space_packet *packet);
 

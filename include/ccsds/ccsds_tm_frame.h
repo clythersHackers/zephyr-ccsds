@@ -32,6 +32,16 @@ typedef uint32_t ccsds_tm_route_mask_t;
 #define CCSDS_TM_SUPPORTED_ROUTE_MASK                                      \
     (CCSDS_TM_LOCAL_ROUTE_MASK | CCSDS_TM_DOWNLINK_ROUTE_MASK)
 
+/**
+ * @brief Deliver one encoded TM transfer frame to a route implementation.
+ *
+ * @param vcid Virtual channel ID that produced the frame.
+ * @param frame Encoded transfer frame or CADU bytes.
+ * @param frame_len Length of @p frame in bytes.
+ * @param user_data Opaque pointer registered with the route.
+ *
+ * @return 0 on success, or a negative errno from the route implementation.
+ */
 typedef int (*ccsds_tm_route_fn_t)(uint8_t vcid, const uint8_t *frame,
                                    size_t frame_len, void *user_data);
 

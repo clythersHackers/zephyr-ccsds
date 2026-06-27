@@ -25,6 +25,12 @@ extern "C" {
 #define CCSDS_RS_INTERLEAVED_PARITY_LEN \
     (CCSDS_RS_PARITY_LEN * CCSDS_RS_INTERLEAVE_DEPTH)
 
+/**
+ * @brief Compute interleaved CCSDS Reed-Solomon parity bytes.
+ *
+ * @param data Interleaved transfer-frame data bytes.
+ * @param parity Output interleaved parity bytes.
+ */
 void ccsds_rs_encode(const uint8_t data[CCSDS_RS_INTERLEAVED_DATA_LEN],
                      uint8_t parity[CCSDS_RS_INTERLEAVED_PARITY_LEN]);
 
