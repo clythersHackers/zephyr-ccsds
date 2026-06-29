@@ -7,6 +7,29 @@
 
 LOG_MODULE_REGISTER(ccsds_cltu, CONFIG_AKIRA_LOG_LEVEL);
 
+static const uint8_t cltu_tail_sequence[CCSDS_BCH_BLOCK_SIZE] = {
+    0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0x79,
+};
+
+static bool ccsds_cltu_has_tail_sequence(const uint8_t *cltu, size_t cltu_len)
+{
+    const size_t tail_offset = cltu_len - CCSDS_BCH_BLOCK_SIZE;
+
+    if (cltu[cltu_len - 1u] != cltu_tail_sequence[CCSDS_BCH_BLOCK_SIZE - 1u]) {
+        LOG_WRN("CLTU tail sequence end byte invalid");
+        return false;
+    }
+
+    for (size_t i = 0u; i < CCSDS_BCH_BLOCK_SIZE - 1u; i++) {
+        if (cltu[tail_offset + i] != cltu_tail_sequence[i]) {
+            LOG_WRN("CLTU tail sequence byte %zu invalid", i);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 int ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
                        ccsds_cltu_frame_cb_t on_frame,
                        void *user_data)
@@ -46,9 +69,10 @@ int ccsds_cltu_decode_message(const uint8_t *cltu, size_t cltu_len,
                               size_t *tc_frame_len)
 {
     const size_t start_len = sizeof(uint16_t);
-    const size_t min_len = start_len + CCSDS_BCH_BLOCK_SIZE;
+    const size_t min_len = start_len + (2u * CCSDS_BCH_BLOCK_SIZE);
     size_t bch_len;
     size_t block_count;
+    size_t decoded_block_count;
     size_t decoded_len;
 
     if (!cltu || !tc_frame || !tc_frame_len) {
@@ -73,6 +97,10 @@ int ccsds_cltu_decode_message(const uint8_t *cltu, size_t cltu_len,
         return -EINVAL;
     }
 
+    if (!ccsds_cltu_has_tail_sequence(cltu, cltu_len)) {
+        return -EINVAL;
+    }
+
     bch_len = cltu_len - start_len;
     if ((bch_len % CCSDS_BCH_BLOCK_SIZE) != 0u) {
         LOG_WRN("CLTU BCH body length is not block-aligned: %zu bytes",
@@ -81,14 +109,16 @@ int ccsds_cltu_decode_message(const uint8_t *cltu, size_t cltu_len,
     }
 
     block_count = bch_len / CCSDS_BCH_BLOCK_SIZE;
-    decoded_len = block_count * CCSDS_BCH_DATA_SIZE;
+    decoded_block_count = block_count - 1u;
+    decoded_len = decoded_block_count * CCSDS_BCH_DATA_SIZE;
     if (tc_frame_cap < decoded_len) {
         LOG_WRN("TC frame buffer too small: need %zu bytes, have %zu",
                 decoded_len, tc_frame_cap);
         return -ENOSPC;
     }
 
-    for (size_t block_index = 0u; block_index < block_count; block_index++) {
+    for (size_t block_index = 0u; block_index < decoded_block_count;
+         block_index++) {
         const size_t in_offset = start_len +
                                  (block_index * CCSDS_BCH_BLOCK_SIZE);
         const size_t out_offset = block_index * CCSDS_BCH_DATA_SIZE;

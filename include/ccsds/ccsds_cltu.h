@@ -111,14 +111,14 @@ int ccsds_cltu_rx_push(struct ccsds_cltu_rx *rx, const uint8_t *chunk,
  *
  * This is the non-streaming primitive below ccsds_cltu_rx_push(): the caller
  * provides a complete CLTU that has already been bounded as one unit. The CLTU
- * must start with the fixed two-byte start sequence, followed by whole 8-byte
- * BCH(63,56) blocks. Each corrected block contributes its first 7 bytes to
- * @p tc_frame.
+ * must start with the fixed two-byte start sequence, followed by one or more
+ * 8-byte BCH(63,56) blocks, and end with the fixed 8-byte tail sequence
+ * c5 c5 c5 c5 c5 c5 c5 79. Each corrected BCH block before the tail
+ * contributes its first 7 bytes to @p tc_frame.
  *
  * @p tc_frame_len is the decoded CLTU payload length, not necessarily the TC
- * transfer-frame length from the TC header. Codeblock fill bytes may remain at
- * the end of @p tc_frame; TC frame parsing is responsible for applying the
- * applicable transfer-frame length rules and ignoring any trailing fill.
+ * transfer-frame length from the TC header. TC frame parsing is responsible for
+ * applying the applicable transfer-frame length rules.
  *
  * @param cltu Complete CLTU bytes including the start sequence.
  * @param cltu_len Length of @p cltu in bytes.
