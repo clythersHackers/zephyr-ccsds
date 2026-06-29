@@ -4,6 +4,9 @@
 #include <string.h>
 
 #include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
 
 static K_MUTEX_DEFINE(tc_rx_stats_lock);
 static struct ccsds_profile_tc_rx_stats tc_rx_stats;
@@ -84,27 +87,6 @@ static void record_tc_result(const struct ccsds_profile_tc_cltu_result *result,
     k_mutex_unlock(&tc_rx_stats_lock);
 }
 
-static int on_rf_tc_frame(const uint8_t *tc_frame, size_t tc_frame_len,
-                          void *user_data)
-{
-    struct ccsds_profile_rf_tc *profile = user_data;
-    struct ccsds_tc_frame frame;
-    struct ccsds_space_packet packet;
-    int ret;
-
-    ret = ccsds_tc_frame_decode(tc_frame, tc_frame_len, &frame);
-    if (ret != 0) {
-        return ret;
-    }
-
-    ret = ccsds_tc_frame_extract_packet(&frame, &packet);
-    if (ret != 0) {
-        return ret;
-    }
-
-    return ccsds_router_dispatch(profile->tc_rx.router, &packet);
-}
-
 int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
                              struct ccsds_router *router)
 {
@@ -116,34 +98,6 @@ int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
     profile->router = router;
 
     return 0;
-}
-
-int ccsds_profile_rf_tc_init(struct ccsds_profile_rf_tc *profile,
-                             struct ccsds_router *router)
-{
-    int ret;
-
-    if (!profile || !router) {
-        return -EINVAL;
-    }
-
-    memset(profile, 0, sizeof(*profile));
-    ret = ccsds_profile_tc_rx_init(&profile->tc_rx, router);
-    if (ret != 0) {
-        return ret;
-    }
-
-    return ccsds_cltu_rx_init(&profile->cltu_rx, on_rf_tc_frame, profile);
-}
-
-int ccsds_profile_rf_tc_push(struct ccsds_profile_rf_tc *profile,
-                             const uint8_t *bytes, size_t len)
-{
-    if (!profile) {
-        return -EINVAL;
-    }
-
-    return ccsds_cltu_rx_push(&profile->cltu_rx, bytes, len);
 }
 
 int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
@@ -187,6 +141,13 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
         record_tc_result(&result, cltu_len, ret);
         return ret;
     }
+
+    LOG_INF("TC frame received: cltu_len=%zu decoded_len=%zu scid=%u vcid=%u "
+            "bypass=%u control=%u fsn=%u data_len=%zu",
+            cltu_len, tc_frame_len, frame.spacecraft_id,
+            frame.virtual_channel_id, frame.bypass ? 1u : 0u,
+            frame.control_command ? 1u : 0u, frame.frame_sequence_number,
+            frame.data_len);
 
     if (frame.control_command) {
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_CONTROL,

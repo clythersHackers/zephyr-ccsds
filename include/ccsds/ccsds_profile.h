@@ -19,11 +19,6 @@ struct ccsds_profile_tc_rx {
     uint8_t frame_buf[CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN];
 };
 
-struct ccsds_profile_rf_tc {
-    struct ccsds_cltu_rx cltu_rx;
-    struct ccsds_profile_tc_rx tc_rx;
-};
-
 struct ccsds_profile_tc_rx_stats {
     uint32_t cltus_received;
     uint32_t cltus_oversize;
@@ -51,30 +46,6 @@ struct ccsds_profile_tc_rx_stats {
  */
 int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
                              struct ccsds_router *router);
-
-/**
- * @brief Initialize an RF telecommand CLTU-to-router profile.
- *
- * @param profile Profile instance to initialize.
- * @param router Router used after CLTU and TC frame decoding.
- *
- * @return 0 on success, or -EINVAL for invalid input.
- */
-int ccsds_profile_rf_tc_init(struct ccsds_profile_rf_tc *profile,
-                             struct ccsds_router *router);
-
-/**
- * @brief Feed RF telecommand bytes into a profile receiver.
- *
- * @param profile Initialized RF telecommand profile.
- * @param bytes Incoming transport bytes.
- * @param len Length of @p bytes in bytes.
- *
- * @return 0 on success, -EINVAL for invalid input, or a lower-layer CLTU,
- *         TC frame, Space Packet, or router error.
- */
-int ccsds_profile_rf_tc_push(struct ccsds_profile_rf_tc *profile,
-                             const uint8_t *bytes, size_t len);
 
 /**
  * @brief Decode one complete TC CLTU and dispatch its Space Packet by APID.

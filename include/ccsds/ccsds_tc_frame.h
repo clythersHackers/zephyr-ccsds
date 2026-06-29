@@ -25,11 +25,15 @@ struct ccsds_tc_frame {
 /**
  * @brief Decode a CCSDS TC transfer frame.
  *
- * @param buf Encoded TC transfer frame bytes.
- * @param len Length of @p buf in bytes.
+ * @param buf Encoded TC transfer frame bytes, optionally followed by decoded
+ *        CLTU fill bytes.
+ * @param len Length of @p buf in bytes. This may be larger than the transfer
+ *        frame length field when CLTU fill bytes are present.
  * @param frame Output decoded frame view.
  *
- * @return -ENOTSUP until TC frame decoding is implemented.
+ * @return 0 on success, -EINVAL for invalid arguments or malformed fields,
+ *         -EMSGSIZE for invalid length or fill, or -EACCES for a wrong
+ *         spacecraft ID.
  */
 int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
                           struct ccsds_tc_frame *frame);
