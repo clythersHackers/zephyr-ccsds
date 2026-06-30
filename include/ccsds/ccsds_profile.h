@@ -55,7 +55,7 @@ struct ccsds_profile_tc_rx_stats {
  * @param profile Profile instance to initialize.
  * @param router Router used after TC frame decode and packet extraction.
  *
- * @return 0 on success, or -EINVAL for invalid input.
+ * @return 0 on success.
  */
 int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
                              struct ccsds_router *router);
@@ -83,7 +83,7 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
  * @param profile Generic TC receive profile.
  * @param tc_vcid TC virtual channel ID, 0 through 63.
  *
- * @return 0 on success, or -EINVAL for invalid input.
+ * @return 0 on success, or -EINVAL for an invalid TC VCID.
  */
 int ccsds_profile_tc_set_accepted_vcid(struct ccsds_profile_tc_rx *profile,
                                        uint8_t tc_vcid);
@@ -91,7 +91,7 @@ int ccsds_profile_tc_set_accepted_vcid(struct ccsds_profile_tc_rx *profile,
 /**
  * @brief Copy aggregate TC receive counters shared by all complete-CLTU inputs.
  *
- * @param stats Output snapshot. Ignored when NULL.
+ * @param stats Output snapshot.
  */
 void ccsds_profile_tc_rx_get_stats(struct ccsds_profile_tc_rx_stats *stats);
 
@@ -106,7 +106,7 @@ void ccsds_profile_tc_rx_reset_stats(void);
  * @param profile Generic TC receive profile.
  * @param clcw Output encoded CLCW word in host integer form.
  *
- * @return 0 on success, or -EINVAL for invalid input.
+ * @return 0 on success, or -EINVAL for an invalid configured TC VCID.
  */
 int ccsds_profile_tc_build_clcw(const struct ccsds_profile_tc_rx *profile,
                                 uint32_t *clcw);
@@ -117,7 +117,7 @@ int ccsds_profile_tc_build_clcw(const struct ccsds_profile_tc_rx *profile,
  * @param clcw Output encoded CLCW word in host integer form.
  * @param user_data Pointer to struct ccsds_profile_tc_rx.
  *
- * @return 0 on success, or -EINVAL for invalid input.
+ * @return 0 on success, or -EINVAL for an invalid configured TC VCID.
  */
 int ccsds_profile_tc_clcw_provider(uint32_t *clcw, void *user_data);
 

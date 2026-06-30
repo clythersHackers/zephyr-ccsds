@@ -32,7 +32,7 @@ enum ccsds_bch_result {
  *                      or -1 when no single-bit correction was applied.
  *
  * @return CCSDS_BCH_OK, CCSDS_BCH_CORRECTED, CCSDS_BCH_DETECTED_EVEN,
- *         CCSDS_BCH_DETECTED_ODD, or -EINVAL for invalid pointers.
+ *         or CCSDS_BCH_DETECTED_ODD.
  *
  * This primitive intentionally handles a single BCH block only. CLTU start,
  * tail, and multi-block framing are handled by higher CCSDS layers.

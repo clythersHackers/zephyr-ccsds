@@ -3,6 +3,8 @@
 #include <errno.h>
 #include <string.h>
 
+#include <zephyr/sys/__assert.h>
+
 size_t ccsds_space_packet_encoded_len(size_t payload_len)
 {
     return CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + payload_len;
@@ -11,7 +13,10 @@ size_t ccsds_space_packet_encoded_len(size_t payload_len)
 int ccsds_space_packet_decode(const uint8_t *buf, size_t len,
                               struct ccsds_space_packet *packet)
 {
-    if (!buf || !packet || len < CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN) {
+    __ASSERT(buf != NULL, "Space Packet input buffer is NULL");
+    __ASSERT(packet != NULL, "Space Packet output is NULL");
+
+    if (len < CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN) {
         return -EINVAL;
     }
 
@@ -39,9 +44,14 @@ int ccsds_space_packet_decode(const uint8_t *buf, size_t len,
 int ccsds_space_packet_encode(const struct ccsds_space_packet *packet,
                               uint8_t *buf, size_t cap, size_t *len)
 {
-    if (!packet || !buf || !len || packet->apid > CCSDS_APID_MAX ||
+    __ASSERT(packet != NULL, "Space Packet input is NULL");
+    __ASSERT(buf != NULL, "Space Packet output buffer is NULL");
+    __ASSERT(len != NULL, "Space Packet length output is NULL");
+    __ASSERT(packet->payload != NULL, "Space Packet payload is NULL");
+
+    if (packet->apid > CCSDS_APID_MAX ||
         packet->sequence_count > 0x3fffu || packet->payload_len == 0u ||
-        packet->payload_len > 0x10000u || !packet->payload) {
+        packet->payload_len > 0x10000u) {
         return -EINVAL;
     }
 

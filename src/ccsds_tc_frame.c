@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/__assert.h>
 #include <zephyr/sys/util.h>
 
 #define CCSDS_TC_PRIMARY_HDR_LEN 5u
@@ -25,10 +26,8 @@ BUILD_ASSERT(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID <= CCSDS_TC_MAX_SCID,
 int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
                           struct ccsds_tc_frame *frame)
 {
-    if (!buf || !frame) {
-        LOG_WRN("TC frame decode called with null argument");
-        return -EINVAL;
-    }
+    __ASSERT(buf != NULL, "TC frame input buffer is NULL");
+    __ASSERT(frame != NULL, "TC frame output is NULL");
 
     memset(frame, 0, sizeof(*frame));
 
@@ -87,9 +86,8 @@ int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
 int ccsds_tc_frame_extract_packet(const struct ccsds_tc_frame *frame,
                                   struct ccsds_space_packet *packet)
 {
-    if (!frame || !packet) {
-        return -EINVAL;
-    }
+    __ASSERT(frame != NULL, "TC frame is NULL");
+    __ASSERT(packet != NULL, "Space Packet output is NULL");
 
     return ccsds_space_packet_decode(frame->data, frame->data_len, packet);
 }

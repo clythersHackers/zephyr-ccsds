@@ -60,7 +60,6 @@ ZTEST(ccsds_crc16, test_check_rejects_missing_crc)
     static const uint8_t data[] = { 0x00 };
 
     zassert_false(ccsds_crc16_check(data, sizeof(data)));
-    zassert_false(ccsds_crc16_check(NULL, CCSDS_CRC16_LEN));
 }
 
 ZTEST_SUITE(ccsds_crc16, NULL, NULL, NULL, NULL, NULL);

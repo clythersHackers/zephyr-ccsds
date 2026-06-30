@@ -3,11 +3,11 @@
 #include <errno.h>
 #include <string.h>
 
+#include <zephyr/sys/__assert.h>
+
 int ccsds_router_init(struct ccsds_router *router)
 {
-    if (!router) {
-        return -EINVAL;
-    }
+    __ASSERT(router != NULL, "CCSDS router is NULL");
 
     memset(router, 0, sizeof(*router));
     return 0;
@@ -17,7 +17,10 @@ int ccsds_router_register_apid(struct ccsds_router *router, uint16_t apid,
                                ccsds_apid_handler_t handler,
                                void *user_data)
 {
-    if (!router || !handler || apid > CCSDS_APID_MAX) {
+    __ASSERT(router != NULL, "CCSDS router is NULL");
+    __ASSERT(handler != NULL, "CCSDS APID handler is NULL");
+
+    if (apid > CCSDS_APID_MAX) {
         return -EINVAL;
     }
 
@@ -44,7 +47,9 @@ int ccsds_router_register_apid(struct ccsds_router *router, uint16_t apid,
 
 int ccsds_router_unregister_apid(struct ccsds_router *router, uint16_t apid)
 {
-    if (!router || apid > CCSDS_APID_MAX) {
+    __ASSERT(router != NULL, "CCSDS router is NULL");
+
+    if (apid > CCSDS_APID_MAX) {
         return -EINVAL;
     }
 
@@ -61,7 +66,10 @@ int ccsds_router_unregister_apid(struct ccsds_router *router, uint16_t apid)
 int ccsds_router_dispatch(struct ccsds_router *router,
                           const struct ccsds_space_packet *packet)
 {
-    if (!router || !packet || packet->apid > CCSDS_APID_MAX) {
+    __ASSERT(router != NULL, "CCSDS router is NULL");
+    __ASSERT(packet != NULL, "CCSDS packet is NULL");
+
+    if (packet->apid > CCSDS_APID_MAX) {
         return -EINVAL;
     }
 

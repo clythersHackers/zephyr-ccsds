@@ -39,7 +39,7 @@ struct ccsds_router {
  *
  * @param router Router instance to clear.
  *
- * @return 0 on success, or -EINVAL for a NULL router.
+ * @return 0 on success.
  */
 int ccsds_router_init(struct ccsds_router *router);
 
@@ -51,7 +51,7 @@ int ccsds_router_init(struct ccsds_router *router);
  * @param handler Callback invoked for packets with @p apid.
  * @param user_data Opaque pointer passed to @p handler.
  *
- * @return 0 on success, -EINVAL for invalid input, or -ENOSPC if the router
+ * @return 0 on success, -EINVAL for invalid APID, or -ENOSPC if the router
  *         table has no free entries.
  */
 int ccsds_router_register_apid(struct ccsds_router *router, uint16_t apid,
@@ -64,7 +64,7 @@ int ccsds_router_register_apid(struct ccsds_router *router, uint16_t apid,
  * @param router Router instance to update.
  * @param apid CCSDS APID, 0 through CCSDS_APID_MAX.
  *
- * @return 0 on success, -EINVAL for invalid input, or -ENOENT if @p apid is
+ * @return 0 on success, -EINVAL for invalid APID, or -ENOENT if @p apid is
  *         not registered.
  */
 int ccsds_router_unregister_apid(struct ccsds_router *router, uint16_t apid);
@@ -75,7 +75,7 @@ int ccsds_router_unregister_apid(struct ccsds_router *router, uint16_t apid);
  * @param router Router instance to search.
  * @param packet Decoded Space Packet.
  *
- * @return Handler return value on match, -EINVAL for invalid input, or -ENOENT
+ * @return Handler return value on match, -EINVAL for invalid APID, or -ENOENT
  *         if no handler is registered for the packet APID.
  */
 int ccsds_router_dispatch(struct ccsds_router *router,

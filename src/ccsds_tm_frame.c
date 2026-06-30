@@ -548,10 +548,11 @@ int ccsds_tm_frame_register_route(ccsds_tm_route_mask_t route_bit,
 {
     uint8_t bit_num;
 
-    if (!route_bit_is_valid(route_bit) || fn == NULL) {
+    if (!route_bit_is_valid(route_bit)) {
         return -EINVAL;
     }
 
+    __ASSERT(fn != NULL, "TM route callback is NULL");
     __ASSERT(initialized, "ccsds_tm_frame_init() not called");
 
     bit_num = route_bit_index(route_bit);
@@ -590,10 +591,11 @@ int ccsds_tm_frame_set_vc_route(uint8_t vcid, ccsds_tm_route_mask_t route_mask)
 int ccsds_tm_frame_get_vc_route(uint8_t vcid,
                                 ccsds_tm_route_mask_t *route_mask)
 {
-    if (vcid > CCSDS_TM_MAX_VC_ID || route_mask == NULL) {
+    if (vcid > CCSDS_TM_MAX_VC_ID) {
         return -EINVAL;
     }
 
+    __ASSERT(route_mask != NULL, "TM route output mask is NULL");
     __ASSERT(initialized, "ccsds_tm_frame_init() not called");
 
     *route_mask = vcs[vcid].route_mask;
@@ -680,7 +682,9 @@ int ccsds_tm_frame_add(uint8_t vcid, const uint8_t *packet, size_t packet_len,
     size_t written = 0u;
     int ret;
 
-    if (!packet || packet_len < CCSDS_SPACE_PACKET_MIN_LEN) {
+    __ASSERT(packet != NULL, "TM input packet is NULL");
+
+    if (packet_len < CCSDS_SPACE_PACKET_MIN_LEN) {
         return -EINVAL;
     }
 

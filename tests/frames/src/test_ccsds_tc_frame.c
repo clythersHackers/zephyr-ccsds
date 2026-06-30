@@ -25,18 +25,6 @@ static void build_tc_frame(uint8_t *buf, size_t len, uint16_t scid,
     buf[4] = fsn;
 }
 
-ZTEST(ccsds_tc_frame, test_decode_rejects_null_arguments)
-{
-    uint8_t frame_bytes[TEST_TC_HDR_LEN];
-    struct ccsds_tc_frame frame;
-
-    zassert_equal(ccsds_tc_frame_decode(NULL, sizeof(frame_bytes), &frame),
-                  -EINVAL);
-    zassert_equal(ccsds_tc_frame_decode(frame_bytes, sizeof(frame_bytes),
-                                        NULL),
-                  -EINVAL);
-}
-
 ZTEST(ccsds_tc_frame, test_decode_rejects_short_frame)
 {
     uint8_t frame_bytes[TEST_TC_HDR_LEN - 1u] = {0};

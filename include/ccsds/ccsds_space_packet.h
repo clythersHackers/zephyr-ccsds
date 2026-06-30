@@ -39,7 +39,7 @@ size_t ccsds_space_packet_encoded_len(size_t payload_len);
  * @param len Length of @p buf in bytes.
  * @param packet Output decoded packet view. The payload points into @p buf.
  *
- * @return 0 on success, -EINVAL for invalid input, or -EMSGSIZE if @p len is
+ * @return 0 on success, -EINVAL for too-short input, or -EMSGSIZE if @p len is
  *         shorter than the packet length field.
  */
 int ccsds_space_packet_decode(const uint8_t *buf, size_t len,
@@ -53,7 +53,7 @@ int ccsds_space_packet_decode(const uint8_t *buf, size_t len,
  * @param cap Output buffer capacity in bytes.
  * @param len Written encoded packet length.
  *
- * @return 0 on success, -EINVAL for invalid packet fields or pointers, or
+ * @return 0 on success, -EINVAL for invalid packet fields, or
  *         -ENOSPC when @p cap is too small.
  */
 int ccsds_space_packet_encode(const struct ccsds_space_packet *packet,

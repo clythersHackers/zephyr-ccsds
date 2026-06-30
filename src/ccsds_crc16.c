@@ -1,5 +1,7 @@
 #include "ccsds_crc16.h"
 
+#include <zephyr/sys/__assert.h>
+
 static const uint16_t crc16_table[256] = {
     0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7,
     0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef,
@@ -37,9 +39,7 @@ static const uint16_t crc16_table[256] = {
 
 uint16_t ccsds_crc16_update(uint16_t crc, const uint8_t *data, size_t len)
 {
-    if (data == NULL && len != 0u) {
-        return crc;
-    }
+    __ASSERT(data != NULL || len == 0u, "CRC input buffer is NULL");
 
     for (size_t i = 0u; i < len; i++) {
         uint8_t table_index = (uint8_t)((crc >> 8) ^ data[i]);
@@ -57,7 +57,9 @@ uint16_t ccsds_crc16_compute(const uint8_t *data, size_t len)
 
 bool ccsds_crc16_check(const uint8_t *data, size_t len)
 {
-    if (data == NULL || len < CCSDS_CRC16_LEN) {
+    __ASSERT(data != NULL, "CRC input buffer is NULL");
+
+    if (len < CCSDS_CRC16_LEN) {
         return false;
     }
 

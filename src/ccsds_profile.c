@@ -5,6 +5,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/__assert.h>
 
 LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -39,20 +40,20 @@ struct ccsds_profile_tc_cltu_result {
 
 static void init_tc_result(struct ccsds_profile_tc_cltu_result *result)
 {
-    if (result) {
-        memset(result, 0, sizeof(*result));
-        result->stage = CCSDS_PROFILE_TC_CLTU_STAGE_NONE;
-    }
+    __ASSERT(result != NULL, "TC CLTU result is NULL");
+
+    memset(result, 0, sizeof(*result));
+    result->stage = CCSDS_PROFILE_TC_CLTU_STAGE_NONE;
 }
 
 static void set_tc_result_error(struct ccsds_profile_tc_cltu_result *result,
                                 enum ccsds_profile_tc_cltu_stage stage,
                                 int error)
 {
-    if (result) {
-        result->stage = stage;
-        result->error = error;
-    }
+    __ASSERT(result != NULL, "TC CLTU result is NULL");
+
+    result->stage = stage;
+    result->error = error;
 }
 
 static void record_tc_result(const struct ccsds_profile_tc_cltu_result *result,
@@ -101,8 +102,10 @@ static int validate_tc_vcid(const struct ccsds_profile_tc_rx *profile,
 {
     uint8_t vcid;
 
-    if (!profile || !frame ||
-        frame->virtual_channel_id >= CCSDS_TC_VC_COUNT) {
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    __ASSERT(frame != NULL, "TC frame is NULL");
+
+    if (frame->virtual_channel_id >= CCSDS_TC_VC_COUNT) {
         return -EINVAL;
     }
 
@@ -121,7 +124,11 @@ static int handle_tc_control_frame(struct ccsds_profile_tc_rx *profile,
 {
     uint8_t vcid;
 
-    if (!profile || !frame || !frame->data || frame->data_len == 0u) {
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    __ASSERT(frame != NULL, "TC frame is NULL");
+    __ASSERT(frame->data != NULL, "TC control frame data is NULL");
+
+    if (frame->data_len == 0u) {
         return -EINVAL;
     }
 
@@ -154,9 +161,8 @@ static int update_tc_sequence_state(struct ccsds_profile_tc_rx *profile,
 {
     uint8_t expected_fsn;
 
-    if (!profile || !frame) {
-        return -EINVAL;
-    }
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    __ASSERT(frame != NULL, "TC frame is NULL");
 
     if (frame->bypass || frame->control_command) {
         return 0;
@@ -182,7 +188,10 @@ int ccsds_profile_tc_build_clcw(const struct ccsds_profile_tc_rx *profile,
 {
     const struct ccsds_profile_tc_vc_state *state;
 
-    if (!profile || !clcw || profile->accepted_vcid >= CCSDS_TC_VC_COUNT) {
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    __ASSERT(clcw != NULL, "CLCW output is NULL");
+
+    if (profile->accepted_vcid >= CCSDS_TC_VC_COUNT) {
         return -EINVAL;
     }
 
@@ -208,9 +217,7 @@ int ccsds_profile_tc_clcw_provider(uint32_t *clcw, void *user_data)
 {
     struct ccsds_profile_tc_rx *profile = user_data;
 
-    if (!profile) {
-        return -EINVAL;
-    }
+    __ASSERT(profile != NULL, "TC profile CLCW provider data is NULL");
 
     return ccsds_profile_tc_build_clcw(profile, clcw);
 }
@@ -218,9 +225,8 @@ int ccsds_profile_tc_clcw_provider(uint32_t *clcw, void *user_data)
 int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
                              struct ccsds_router *router)
 {
-    if (!profile || !router) {
-        return -EINVAL;
-    }
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    __ASSERT(router != NULL, "TC profile router is NULL");
 
     memset(profile, 0, sizeof(*profile));
     profile->router = router;
@@ -231,7 +237,9 @@ int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
 int ccsds_profile_tc_set_accepted_vcid(struct ccsds_profile_tc_rx *profile,
                                        uint8_t tc_vcid)
 {
-    if (!profile || tc_vcid >= CCSDS_TC_VC_COUNT) {
+    __ASSERT(profile != NULL, "TC profile is NULL");
+
+    if (tc_vcid >= CCSDS_TC_VC_COUNT) {
         return -EINVAL;
     }
 
@@ -251,12 +259,9 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 
     init_tc_result(&result);
 
-    if (!profile || !profile->router || !cltu) {
-        set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_NONE,
-                            -EINVAL);
-        record_tc_result(&result, cltu_len, -EINVAL);
-        return -EINVAL;
-    }
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    __ASSERT(profile->router != NULL, "TC profile router is NULL");
+    __ASSERT(cltu != NULL, "TC CLTU input is NULL");
 
     if (cltu_len > CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN) {
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_OVERSIZE,
@@ -335,9 +340,7 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 
 void ccsds_profile_tc_rx_get_stats(struct ccsds_profile_tc_rx_stats *stats)
 {
-    if (!stats) {
-        return;
-    }
+    __ASSERT(stats != NULL, "TC RX stats output is NULL");
 
     k_mutex_lock(&tc_rx_stats_lock, K_FOREVER);
     *stats = tc_rx_stats;

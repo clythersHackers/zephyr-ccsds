@@ -92,11 +92,6 @@ ZTEST(ccsds_cltu, test_start_sequence_rejects_two_bit_error)
     zassert_false(ccsds_cltu_is_start_sequence(candidate));
 }
 
-ZTEST(ccsds_cltu, test_start_sequence_rejects_null)
-{
-    zassert_false(ccsds_cltu_is_start_sequence(NULL));
-}
-
 ZTEST(ccsds_cltu, test_decode_rejects_bad_start_sequence)
 {
     static const uint8_t cltu[] = {

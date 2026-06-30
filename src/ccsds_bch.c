@@ -2,6 +2,8 @@
 
 #include <errno.h>
 
+#include <zephyr/sys/__assert.h>
+
 /* Single BCH(63,56) block decoder; CLTU framing stays above this layer. */
 int ccsds_bch_decode_block(const uint8_t block[CCSDS_BCH_BLOCK_SIZE],
                            uint8_t data[CCSDS_BCH_DATA_SIZE],
@@ -10,9 +12,8 @@ int ccsds_bch_decode_block(const uint8_t block[CCSDS_BCH_BLOCK_SIZE],
     uint8_t syndrome = 0u;
     bool odd_parity = false;
 
-    if (!block || !data) {
-        return -EINVAL;
-    }
+    __ASSERT(block != NULL, "BCH input block is NULL");
+    __ASSERT(data != NULL, "BCH output data is NULL");
 
     if (corrected_bit) {
         *corrected_bit = -1;

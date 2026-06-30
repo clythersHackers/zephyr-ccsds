@@ -73,7 +73,7 @@ int ccsds_tm_frame_init(void);
  * @param fn Callback invoked for frames routed through @p route_bit.
  * @param user_data Opaque pointer passed to @p fn.
  *
- * @return 0 on success, or -EINVAL for an invalid route bit or NULL callback.
+ * @return 0 on success, or -EINVAL for an invalid route bit.
  */
 int ccsds_tm_frame_register_route(ccsds_tm_route_mask_t route_bit,
                                   ccsds_tm_route_fn_t fn, void *user_data);
@@ -108,7 +108,7 @@ int ccsds_tm_frame_set_vc_route(uint8_t vcid,
  * @param vcid Virtual channel ID, 0 through 7.
  * @param route_mask Output pointer for the current VC route mask.
  *
- * @return 0 on success, or -EINVAL for an invalid VCID or NULL output pointer.
+ * @return 0 on success, or -EINVAL for an invalid VCID.
  */
 int ccsds_tm_frame_get_vc_route(uint8_t vcid,
                                 ccsds_tm_route_mask_t *route_mask);
@@ -142,7 +142,7 @@ int ccsds_tm_frame_stop(void);
  * @param packet_len Length of @p packet in bytes.
  * @param timeout Timeout used for the VC write mutex and pipe writes.
  *
- * @return 0 on success, -EINVAL for invalid packet/VC input, -EMSGSIZE if the
+ * @return 0 on success, -EINVAL for invalid packet fields or VCID, -EMSGSIZE if the
  *         packet cannot fit in the VC queue, or a Zephyr mutex/pipe error.
  */
 int ccsds_tm_frame_add(uint8_t vcid, const uint8_t *packet, size_t packet_len,

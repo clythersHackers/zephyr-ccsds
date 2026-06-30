@@ -8,6 +8,8 @@
 
 #include "ccsds_bch.h"
 
+#include <zephyr/sys/__assert.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,9 +50,7 @@ static inline bool ccsds_cltu_is_start_sequence(const uint8_t *candidate)
 {
     unsigned int errors;
 
-    if (!candidate) {
-        return false;
-    }
+    __ASSERT(candidate != NULL, "CLTU start sequence candidate is NULL");
 
     errors = __builtin_popcount(candidate[0] ^ (CLTU_START_SEQUENCE >> 8));
     if (errors > 1u) {
@@ -72,7 +72,7 @@ static inline bool ccsds_cltu_is_start_sequence(const uint8_t *candidate)
  * @param on_frame Callback invoked for each decoded TC frame.
  * @param user_data Opaque pointer passed to @p on_frame.
  *
- * @return 0 on success, or -EINVAL for invalid input.
+ * @return 0 on success.
  */
 int ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
                        ccsds_cltu_frame_cb_t on_frame,
@@ -85,7 +85,7 @@ int ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
  * loss of synchronization, buffer overflow, or when the caller wants the next
  * pushed byte to start a fresh acquisition attempt.
  *
- * @param rx Receiver state to reset. Ignored when NULL.
+ * @param rx Receiver state to reset.
  */
 void ccsds_cltu_rx_reset(struct ccsds_cltu_rx *rx);
 

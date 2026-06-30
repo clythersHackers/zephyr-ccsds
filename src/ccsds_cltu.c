@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <string.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/__assert.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_REGISTER(ccsds_cltu, CONFIG_AKIRA_LOG_LEVEL);
@@ -34,9 +35,8 @@ int ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
                        ccsds_cltu_frame_cb_t on_frame,
                        void *user_data)
 {
-    if (!rx || !on_frame) {
-        return -EINVAL;
-    }
+    __ASSERT(rx != NULL, "CLTU receiver is NULL");
+    __ASSERT(on_frame != NULL, "CLTU frame callback is NULL");
 
     memset(rx, 0, sizeof(*rx));
     rx->on_frame = on_frame;
@@ -46,9 +46,7 @@ int ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
 
 void ccsds_cltu_rx_reset(struct ccsds_cltu_rx *rx)
 {
-    if (!rx) {
-        return;
-    }
+    __ASSERT(rx != NULL, "CLTU receiver is NULL");
 
     rx->buffered_len = 0u;
     rx->in_cltu = false;
@@ -75,10 +73,9 @@ int ccsds_cltu_decode_message(const uint8_t *cltu, size_t cltu_len,
     size_t decoded_block_count;
     size_t decoded_len;
 
-    if (!cltu || !tc_frame || !tc_frame_len) {
-        LOG_WRN("CLTU decode called with null argument");
-        return -EINVAL;
-    }
+    __ASSERT(cltu != NULL, "CLTU input is NULL");
+    __ASSERT(tc_frame != NULL, "TC frame output buffer is NULL");
+    __ASSERT(tc_frame_len != NULL, "TC frame length output is NULL");
 
     *tc_frame_len = 0u;
 
@@ -97,14 +94,17 @@ int ccsds_cltu_decode_message(const uint8_t *cltu, size_t cltu_len,
         return -EINVAL;
     }
 
-    if (!ccsds_cltu_has_tail_sequence(cltu, cltu_len)) {
-        return -EINVAL;
-    }
+
 
     bch_len = cltu_len - start_len;
     if ((bch_len % CCSDS_BCH_BLOCK_SIZE) != 0u) {
         LOG_WRN("CLTU BCH body length is not block-aligned: %zu bytes",
                 bch_len);
+        return -EINVAL;
+    }
+
+    if (!ccsds_cltu_has_tail_sequence(cltu, cltu_len)) {
+        LOG_WRN("CLTU tail sequence not found");
         return -EINVAL;
     }
 
