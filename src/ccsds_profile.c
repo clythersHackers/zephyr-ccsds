@@ -6,6 +6,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/__assert.h>
+#include <zephyr/sys/util.h>
 
 LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -17,6 +18,13 @@ LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
 #define CCSDS_CLCW_VERSION_NUMBER 0u
 #define CCSDS_CLCW_STATUS_FIELD 0u
 #define CCSDS_CLCW_COP_IN_EFFECT 1u
+#define CCSDS_TC_FSN_MODULO 256u
+#define CCSDS_TC_COP1_HALF_WINDOW (CONFIG_AKIRA_CCSDS_COP1_WINDOW_SIZE / 2u)
+
+BUILD_ASSERT(CONFIG_AKIRA_CCSDS_COP1_WINDOW_SIZE >= 4,
+             "COP-1 window size must leave a non-empty positive/negative window");
+BUILD_ASSERT(CONFIG_AKIRA_CCSDS_COP1_WINDOW_SIZE <= CCSDS_TC_FSN_MODULO / 2u,
+             "COP-1 window size must fit inside the 8-bit FSN half range");
 
 static K_MUTEX_DEFINE(tc_rx_stats_lock);
 static struct ccsds_profile_tc_rx_stats tc_rx_stats;
@@ -160,6 +168,7 @@ static int update_tc_sequence_state(struct ccsds_profile_tc_rx *profile,
                                     const struct ccsds_tc_frame *frame)
 {
     uint8_t expected_fsn;
+    uint8_t received_fsn;
 
     __ASSERT(profile != NULL, "TC profile is NULL");
     __ASSERT(frame != NULL, "TC frame is NULL");
@@ -169,18 +178,33 @@ static int update_tc_sequence_state(struct ccsds_profile_tc_rx *profile,
     }
 
     expected_fsn = profile->vc_state.report_value;
-    if (frame->frame_sequence_number != expected_fsn) {
-        profile->vc_state.retransmit_flag = true;
-        LOG_WRN("TC frame sequence jump: vcid=%u expected=%u received=%u",
-                frame->virtual_channel_id, expected_fsn,
-                frame->frame_sequence_number);
+    received_fsn = frame->frame_sequence_number;
+
+    if (received_fsn == expected_fsn) {
+        profile->vc_state.report_value = (uint8_t)(expected_fsn + 1u);
+        profile->vc_state.retransmit_flag = false;
+
+        return 0;
+    }
+
+    if ((uint8_t)(expected_fsn - received_fsn) < (uint8_t)CCSDS_TC_COP1_HALF_WINDOW) {
+        LOG_WRN("TC frame sequence duplicate: vcid=%u expected=%u received=%u",
+                frame->virtual_channel_id, expected_fsn, received_fsn);
         return -EAGAIN;
     }
 
-    profile->vc_state.report_value = (uint8_t)(expected_fsn + 1u);
-    profile->vc_state.retransmit_flag = false;
+    if ((uint8_t)(received_fsn - expected_fsn) < (uint8_t)CCSDS_TC_COP1_HALF_WINDOW) {
+        profile->vc_state.retransmit_flag = true;
+        LOG_WRN("TC frame sequence jump: vcid=%u expected=%u received=%u",
+                frame->virtual_channel_id, expected_fsn, received_fsn);
+        return -EAGAIN;
+    }
 
-    return 0;
+    profile->vc_state.lockout_flag = true;
+    LOG_WRN("TC frame sequence lockout: vcid=%u expected=%u received=%u",
+            frame->virtual_channel_id, expected_fsn, received_fsn);
+
+    return -EAGAIN;
 }
 
 int ccsds_profile_tc_build_clcw(const struct ccsds_profile_tc_rx *profile,
