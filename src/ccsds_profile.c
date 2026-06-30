@@ -127,6 +127,14 @@ static int validate_tc_vcid(const struct ccsds_profile_tc_rx *profile,
     return 0;
 }
 
+static bool is_tc_unlock_control_frame(const struct ccsds_tc_frame *frame)
+{
+    __ASSERT(frame != NULL, "TC frame is NULL");
+
+    return frame->control_command && frame->data_len > 0u &&
+           frame->data[0] == CCSDS_TC_CONTROL_UNLOCK;
+}
+
 static int handle_tc_control_frame(struct ccsds_profile_tc_rx *profile,
                                    const struct ccsds_tc_frame *frame)
 {
@@ -142,11 +150,17 @@ static int handle_tc_control_frame(struct ccsds_profile_tc_rx *profile,
 
     vcid = frame->virtual_channel_id;
 
-    if (frame->data[0] == CCSDS_TC_CONTROL_UNLOCK) {
+    if (is_tc_unlock_control_frame(frame)) {
         profile->vc_state.lockout_flag = false;
         profile->vc_state.retransmit_flag = false;
         LOG_INF("TC control UNLOCK: vcid=%u", vcid);
         return 0;
+    }
+
+    if (profile->vc_state.lockout_flag) {
+        LOG_WRN("TC control rejected during lockout: vcid=%u first=0x%02x",
+                vcid, frame->data[0]);
+        return -EACCES;
     }
 
     if (frame->data_len >= CCSDS_TC_CONTROL_SET_VR_MIN_LEN &&
@@ -172,6 +186,12 @@ static int update_tc_sequence_state(struct ccsds_profile_tc_rx *profile,
 
     __ASSERT(profile != NULL, "TC profile is NULL");
     __ASSERT(frame != NULL, "TC frame is NULL");
+
+    if (profile->vc_state.lockout_flag) {
+        LOG_WRN("TC frame rejected during lockout: vcid=%u",
+                frame->virtual_channel_id);
+        return -EACCES;
+    }
 
     if (frame->bypass || frame->control_command) {
         return 0;

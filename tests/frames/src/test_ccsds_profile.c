@@ -125,6 +125,28 @@ ZTEST(ccsds_profile, test_tc_dispatch_accepts_set_vr_control_frame)
     zassert_equal(stats.last_error, 0);
 }
 
+ZTEST(ccsds_profile, test_tc_dispatch_rejects_set_vr_during_lockout)
+{
+    static const char set_vr_cltu_hex[] =
+        "eb90307b00090082002a1fa63455555555a2c5c5c5c5c5c5c579";
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len = 0u;
+
+    zassert_ok(decode_hex_fixture(set_vr_cltu_hex, cltu, sizeof(cltu),
+                                  &cltu_len));
+    zassert_ok(ccsds_router_init(&router));
+    zassert_ok(ccsds_profile_tc_rx_init(&profile, &router));
+    profile.vc_state.lockout_flag = true;
+    profile.vc_state.report_value = 0x10u;
+
+    zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
+                  -EACCES);
+    zassert_true(profile.vc_state.lockout_flag);
+    zassert_equal(profile.vc_state.report_value, 0x10u);
+}
+
 ZTEST(ccsds_profile, test_tc_dispatch_advances_expected_fsn)
 {
     struct ccsds_router router;
@@ -143,6 +165,26 @@ ZTEST(ccsds_profile, test_tc_dispatch_advances_expected_fsn)
                   -EMSGSIZE);
     zassert_equal(profile.vc_state.report_value, 0x20u);
     zassert_false(profile.vc_state.retransmit_flag);
+}
+
+ZTEST(ccsds_profile, test_tc_dispatch_rejects_data_frame_during_lockout)
+{
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len = 0u;
+
+    zassert_ok(decode_hex_fixture(short_data_cltu_hex, cltu, sizeof(cltu),
+                                  &cltu_len));
+    zassert_ok(ccsds_router_init(&router));
+    zassert_ok(ccsds_profile_tc_rx_init(&profile, &router));
+    profile.vc_state.lockout_flag = true;
+    profile.vc_state.report_value = TEST_SHORT_DATA_FSN;
+
+    zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
+                  -EACCES);
+    zassert_true(profile.vc_state.lockout_flag);
+    zassert_equal(profile.vc_state.report_value, TEST_SHORT_DATA_FSN);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_requests_retransmit_on_fsn_jump)
