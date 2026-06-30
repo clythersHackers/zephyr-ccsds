@@ -46,6 +46,17 @@ typedef int (*ccsds_tm_route_fn_t)(uint8_t vcid, const uint8_t *frame,
                                    size_t frame_len, void *user_data);
 
 /**
+ * @brief Provide one encoded CLCW for TM OCF insertion.
+ *
+ * @param clcw Output CLCW word. The TM frame module serializes this in
+ *        network byte order into the OCF.
+ * @param user_data Opaque pointer registered with the provider.
+ *
+ * @return 0 on success, or a negative errno to leave the OCF zero-filled.
+ */
+typedef int (*ccsds_tm_clcw_provider_t)(uint32_t *clcw, void *user_data);
+
+/**
  * @brief Initialize TM frame admission state and routing tables.
  *
  * This must be called before any other TM frame API. It resets VC pipe state,
@@ -66,6 +77,19 @@ int ccsds_tm_frame_init(void);
  */
 int ccsds_tm_frame_register_route(ccsds_tm_route_mask_t route_bit,
                                   ccsds_tm_route_fn_t fn, void *user_data);
+
+/**
+ * @brief Register or clear the CLCW provider used for TM OCF insertion.
+ *
+ * Passing NULL clears the provider and preserves the default zero OCF.
+ *
+ * @param fn Provider callback, or NULL to clear.
+ * @param user_data Opaque pointer passed to @p fn.
+ *
+ * @return 0 on success.
+ */
+int ccsds_tm_frame_set_clcw_provider(ccsds_tm_clcw_provider_t fn,
+                                     void *user_data);
 
 /**
  * @brief Set the route mask used by a virtual channel.

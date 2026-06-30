@@ -39,7 +39,7 @@
     (CCSDS_TM_ASM_LEN + CCSDS_TM_FRAME_LEN + CCSDS_RS_INTERLEAVED_PARITY_LEN)
 #else
 #define CCSDS_TM_FRAME_LEN CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN
-#define CCSDS_TM_CODED_FRAME_LEN CCSDS_TM_FRAME_LEN
+#define CCSDS_TM_CODED_FRAME_LEN (CCSDS_TM_ASM_LEN + CCSDS_TM_FRAME_LEN)
 #endif
 
 #ifdef CONFIG_AKIRA_CCSDS_TM_FECF
@@ -78,8 +78,14 @@ struct ccsds_tm_route {
     void *user_data;
 };
 
+struct ccsds_tm_clcw_provider {
+    ccsds_tm_clcw_provider_t fn;
+    void *user_data;
+};
+
 static struct ccsds_tm_vc vcs[CCSDS_TM_VC_COUNT];
 static struct ccsds_tm_route routes[CCSDS_TM_ROUTE_COUNT];
+static struct ccsds_tm_clcw_provider clcw_provider;
 static uint8_t frame_buf[CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN];
 static uint8_t coded_frame_buf[CCSDS_TM_CODED_FRAME_LEN];
 static struct k_work_delayable generator_work;
@@ -141,6 +147,14 @@ static void write_be16(uint8_t *buf, uint16_t value)
     buf[1] = (uint8_t)value;
 }
 
+static void write_be32(uint8_t *buf, uint32_t value)
+{
+    buf[0] = (uint8_t)(value >> 24);
+    buf[1] = (uint8_t)(value >> 16);
+    buf[2] = (uint8_t)(value >> 8);
+    buf[3] = (uint8_t)value;
+}
+
 /* Build the TM primary header using the already-latched frame counters. */
 static void build_primary_header(uint8_t *buf, uint8_t vcid,
                                  uint16_t first_header_pointer)
@@ -172,6 +186,21 @@ static void append_fecf(void)
     fecf = ccsds_crc16_compute(frame_buf, fecf_offset);
     write_be16(&frame_buf[fecf_offset], fecf);
 #endif
+}
+
+static void append_ocf(size_t ocf_offset)
+{
+    uint32_t clcw;
+
+    if (clcw_provider.fn == NULL) {
+        return;
+    }
+
+    if (clcw_provider.fn(&clcw, clcw_provider.user_data) != 0) {
+        return;
+    }
+
+    write_be32(&frame_buf[ocf_offset], clcw);
 }
 
 /* Advance master and selected virtual-channel frame counters after emit. */
@@ -236,6 +265,7 @@ static size_t build_idle_transfer_frame(uint8_t vcid)
 
     memset(frame_buf, 0, CCSDS_TM_FRAME_LEN);
     build_primary_header(frame_buf, vcid, CCSDS_TM_IDLE_FIRST_HEADER_POINTER);
+    append_ocf(ocf_offset);
     append_fecf();
 
     __ASSERT_NO_MSG(ocf_offset + CCSDS_TM_OCF_LEN + CCSDS_TM_FECF_LEN ==
@@ -319,6 +349,7 @@ static int build_packet_transfer_frame(uint8_t vcid, size_t *frame_len)
     }
 
     build_primary_header(frame_buf, vcid, first_header_pointer);
+    append_ocf(ocf_offset);
     append_fecf();
 
     __ASSERT_NO_MSG(ocf_offset + CCSDS_TM_OCF_LEN + CCSDS_TM_FECF_LEN ==
@@ -350,9 +381,13 @@ static size_t code_transfer_frame(const uint8_t *frame, size_t frame_len)
 
     return CCSDS_TM_CODED_FRAME_LEN;
 #else
-    memcpy(coded_frame_buf, frame, frame_len);
+    coded_frame_buf[0] = CCSDS_TM_ASM0;
+    coded_frame_buf[1] = CCSDS_TM_ASM1;
+    coded_frame_buf[2] = CCSDS_TM_ASM2;
+    coded_frame_buf[3] = CCSDS_TM_ASM3;
+    memcpy(&coded_frame_buf[CCSDS_TM_ASM_LEN], frame, frame_len);
 
-    return frame_len;
+    return CCSDS_TM_ASM_LEN + frame_len;
 #endif
 }
 
@@ -495,6 +530,7 @@ int ccsds_tm_frame_init(void)
     }
 
     memset(routes, 0, sizeof(routes));
+    memset(&clcw_provider, 0, sizeof(clcw_provider));
     memset(frame_buf, 0, sizeof(frame_buf));
     mcfc = 0u;
     generator_active_delay = K_NO_WAIT;
@@ -521,6 +557,17 @@ int ccsds_tm_frame_register_route(ccsds_tm_route_mask_t route_bit,
     bit_num = route_bit_index(route_bit);
     routes[bit_num].fn = fn;
     routes[bit_num].user_data = user_data;
+
+    return 0;
+}
+
+int ccsds_tm_frame_set_clcw_provider(ccsds_tm_clcw_provider_t fn,
+                                     void *user_data)
+{
+    __ASSERT(initialized, "ccsds_tm_frame_init() not called");
+
+    clcw_provider.fn = fn;
+    clcw_provider.user_data = user_data;
 
     return 0;
 }
@@ -613,6 +660,15 @@ bool ccsds_tm_frame_test_run_cycle(k_timeout_t *next_delay, uint8_t *vcid)
     }
 
     return active;
+}
+
+int ccsds_tm_frame_test_get_clcw(uint32_t *clcw)
+{
+    if (clcw_provider.fn == NULL) {
+        return -ENOENT;
+    }
+
+    return clcw_provider.fn(clcw, clcw_provider.user_data);
 }
 #endif /* CONFIG_ZTEST */
 

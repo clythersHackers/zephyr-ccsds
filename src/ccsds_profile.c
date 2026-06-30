@@ -8,6 +8,15 @@
 
 LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
 
+#define CCSDS_TC_CONTROL_UNLOCK 0x00u
+#define CCSDS_TC_CONTROL_SET_VR 0x82u
+#define CCSDS_TC_CONTROL_SET_VR_QUALIFIER 0x00u
+#define CCSDS_TC_CONTROL_SET_VR_MIN_LEN 3u
+#define CCSDS_CLCW_CONTROL_WORD_TYPE 0u
+#define CCSDS_CLCW_VERSION_NUMBER 0u
+#define CCSDS_CLCW_STATUS_FIELD 0u
+#define CCSDS_CLCW_COP_IN_EFFECT 1u
+
 static K_MUTEX_DEFINE(tc_rx_stats_lock);
 static struct ccsds_profile_tc_rx_stats tc_rx_stats;
 
@@ -87,6 +96,125 @@ static void record_tc_result(const struct ccsds_profile_tc_cltu_result *result,
     k_mutex_unlock(&tc_rx_stats_lock);
 }
 
+static int validate_tc_vcid(const struct ccsds_profile_tc_rx *profile,
+                            const struct ccsds_tc_frame *frame)
+{
+    uint8_t vcid;
+
+    if (!profile || !frame ||
+        frame->virtual_channel_id >= CCSDS_TC_VC_COUNT) {
+        return -EINVAL;
+    }
+
+    vcid = frame->virtual_channel_id;
+    if (vcid != profile->accepted_vcid) {
+        LOG_WRN("TC frame rejected for unconfigured VC: vcid=%u accepted=%u",
+                vcid, profile->accepted_vcid);
+        return -EACCES;
+    }
+
+    return 0;
+}
+
+static int handle_tc_control_frame(struct ccsds_profile_tc_rx *profile,
+                                   const struct ccsds_tc_frame *frame)
+{
+    uint8_t vcid;
+
+    if (!profile || !frame || !frame->data || frame->data_len == 0u) {
+        return -EINVAL;
+    }
+
+    vcid = frame->virtual_channel_id;
+
+    if (frame->data[0] == CCSDS_TC_CONTROL_UNLOCK) {
+        profile->vc_state.lockout_flag = false;
+        profile->vc_state.retransmit_flag = false;
+        LOG_INF("TC control UNLOCK: vcid=%u", vcid);
+        return 0;
+    }
+
+    if (frame->data_len >= CCSDS_TC_CONTROL_SET_VR_MIN_LEN &&
+        frame->data[0] == CCSDS_TC_CONTROL_SET_VR &&
+        frame->data[1] == CCSDS_TC_CONTROL_SET_VR_QUALIFIER) {
+        profile->vc_state.report_value = frame->data[2];
+        profile->vc_state.retransmit_flag = false;
+        LOG_INF("TC control SET VR: vcid=%u report_value=%u", vcid,
+                profile->vc_state.report_value);
+        return 0;
+    }
+
+    LOG_WRN("TC control command unsupported: vcid=%u first=0x%02x len=%zu",
+            vcid, frame->data[0], frame->data_len);
+    return -ENOTSUP;
+}
+
+static int update_tc_sequence_state(struct ccsds_profile_tc_rx *profile,
+                                    const struct ccsds_tc_frame *frame)
+{
+    uint8_t expected_fsn;
+
+    if (!profile || !frame) {
+        return -EINVAL;
+    }
+
+    if (frame->bypass || frame->control_command) {
+        return 0;
+    }
+
+    expected_fsn = profile->vc_state.report_value;
+    if (frame->frame_sequence_number != expected_fsn) {
+        profile->vc_state.retransmit_flag = true;
+        LOG_WRN("TC frame sequence jump: vcid=%u expected=%u received=%u",
+                frame->virtual_channel_id, expected_fsn,
+                frame->frame_sequence_number);
+        return -EAGAIN;
+    }
+
+    profile->vc_state.report_value = (uint8_t)(expected_fsn + 1u);
+    profile->vc_state.retransmit_flag = false;
+
+    return 0;
+}
+
+int ccsds_profile_tc_build_clcw(const struct ccsds_profile_tc_rx *profile,
+                                uint32_t *clcw)
+{
+    const struct ccsds_profile_tc_vc_state *state;
+
+    if (!profile || !clcw || profile->accepted_vcid >= CCSDS_TC_VC_COUNT) {
+        return -EINVAL;
+    }
+
+    state = &profile->vc_state;
+
+    *clcw = ((uint32_t)(CCSDS_CLCW_CONTROL_WORD_TYPE & 0x1u) << 31) |
+            ((uint32_t)(CCSDS_CLCW_VERSION_NUMBER & 0x3u) << 29) |
+            ((uint32_t)(CCSDS_CLCW_STATUS_FIELD & 0x7u) << 26) |
+            ((uint32_t)(CCSDS_CLCW_COP_IN_EFFECT & 0x3u) << 24) |
+            ((uint32_t)(profile->accepted_vcid & 0x3fu) << 18) |
+            ((uint32_t)(state->no_rf_available_flag ? 1u : 0u) << 15) |
+            ((uint32_t)(state->no_bit_lock_flag ? 1u : 0u) << 14) |
+            ((uint32_t)(state->lockout_flag ? 1u : 0u) << 13) |
+            ((uint32_t)(state->wait_flag ? 1u : 0u) << 12) |
+            ((uint32_t)(state->retransmit_flag ? 1u : 0u) << 11) |
+            ((uint32_t)(state->farm_b_counter & 0x3u) << 9) |
+            state->report_value;
+
+    return 0;
+}
+
+int ccsds_profile_tc_clcw_provider(uint32_t *clcw, void *user_data)
+{
+    struct ccsds_profile_tc_rx *profile = user_data;
+
+    if (!profile) {
+        return -EINVAL;
+    }
+
+    return ccsds_profile_tc_build_clcw(profile, clcw);
+}
+
 int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
                              struct ccsds_router *router)
 {
@@ -96,6 +224,18 @@ int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
 
     memset(profile, 0, sizeof(*profile));
     profile->router = router;
+
+    return 0;
+}
+
+int ccsds_profile_tc_set_accepted_vcid(struct ccsds_profile_tc_rx *profile,
+                                       uint8_t tc_vcid)
+{
+    if (!profile || tc_vcid >= CCSDS_TC_VC_COUNT) {
+        return -EINVAL;
+    }
+
+    profile->accepted_vcid = tc_vcid;
 
     return 0;
 }
@@ -149,11 +289,27 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
             frame.control_command ? 1u : 0u, frame.frame_sequence_number,
             frame.data_len);
 
+    ret = validate_tc_vcid(profile, &frame);
+    if (ret != 0) {
+        set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME,
+                            ret);
+        record_tc_result(&result, cltu_len, ret);
+        return ret;
+    }
+
     if (frame.control_command) {
-        set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_CONTROL,
-                            -ENOTSUP);
-        record_tc_result(&result, cltu_len, -ENOTSUP);
-        return -ENOTSUP;
+        ret = handle_tc_control_frame(profile, &frame);
+        set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_CONTROL, ret);
+        record_tc_result(&result, cltu_len, ret);
+        return ret;
+    }
+
+    ret = update_tc_sequence_state(profile, &frame);
+    if (ret != 0) {
+        set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME,
+                            ret);
+        record_tc_result(&result, cltu_len, ret);
+        return ret;
     }
 
     ret = ccsds_tc_frame_extract_packet(&frame, &packet);

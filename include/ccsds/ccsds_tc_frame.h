@@ -12,6 +12,8 @@
 extern "C" {
 #endif
 
+#define CCSDS_TC_VC_COUNT 64u
+
 struct ccsds_tc_frame {
     uint16_t spacecraft_id;
     uint8_t virtual_channel_id;

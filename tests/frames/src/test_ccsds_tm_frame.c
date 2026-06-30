@@ -40,8 +40,8 @@ bool ccsds_tm_frame_test_run_cycle(k_timeout_t *next_delay, uint8_t *vcid);
 #define TEST_TM_FRAME_OFFSET TEST_TM_ASM_LEN
 #else
 #define TEST_TM_FRAME_LEN CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN
-#define TEST_TM_CODED_LEN TEST_TM_FRAME_LEN
-#define TEST_TM_FRAME_OFFSET 0u
+#define TEST_TM_CODED_LEN (TEST_TM_ASM_LEN + TEST_TM_FRAME_LEN)
+#define TEST_TM_FRAME_OFFSET TEST_TM_ASM_LEN
 #endif
 
 #ifdef CONFIG_AKIRA_CCSDS_TM_FECF
@@ -98,6 +98,16 @@ static void build_test_packet(uint8_t *packet, size_t packet_len,
     for (size_t i = TEST_TM_PRIMARY_HDR_LEN; i < packet_len; i++) {
         packet[i] = seed + (uint8_t)i;
     }
+}
+
+static int fixed_clcw_provider(uint32_t *clcw, void *user_data)
+{
+    ARG_UNUSED(user_data);
+
+    zassert_not_null(clcw);
+    *clcw = 0x010ffffau;
+
+    return 0;
 }
 
 static void tm_frame_setup(void *fixture)
@@ -228,13 +238,41 @@ ZTEST(ccsds_tm_frame, test_idle_output_counters_increment)
     zassert_equal(capture.calls, 2u);
 }
 
-#ifdef CONFIG_AKIRA_CCSDS_RS
+ZTEST(ccsds_tm_frame, test_idle_output_carries_provider_clcw_in_ocf)
+{
+    struct tm_capture capture = {0};
+    const uint8_t *tm_frame;
+    size_t data_len;
+    size_t ocf_offset;
+    static const uint8_t expected_ocf[] = {0x01u, 0x0fu, 0xffu, 0xfau};
+
+    zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE,
+                                             capture_route, &capture));
+    zassert_ok(ccsds_tm_frame_set_vc_route(TEST_TM_IDLE_VC_ID,
+                                           CCSDS_TM_ROUTE_ARCHIVE));
+    zassert_ok(ccsds_tm_frame_set_clcw_provider(fixed_clcw_provider, NULL));
+
+    zassert_false(ccsds_tm_frame_test_run_cycle(NULL, NULL));
+
+    tm_frame = &capture.frame[TEST_TM_FRAME_OFFSET];
+    data_len = TEST_TM_FRAME_LEN - TEST_TM_PRIMARY_HDR_LEN - TEST_TM_OCF_LEN -
+               TEST_TM_FECF_LEN;
+    ocf_offset = TEST_TM_PRIMARY_HDR_LEN + data_len;
+
+    zassert_mem_equal(&tm_frame[ocf_offset], expected_ocf,
+                      sizeof(expected_ocf));
+}
+
 ZTEST(ccsds_tm_frame, test_idle_output_includes_asm_and_rs_parity)
 {
     struct tm_capture capture = {0};
+#ifdef CONFIG_AKIRA_CCSDS_RS
     uint8_t expected_parity[CCSDS_RS_INTERLEAVED_PARITY_LEN];
+#endif
     const uint8_t *tm_frame;
+#ifdef CONFIG_AKIRA_CCSDS_RS
     const uint8_t *parity;
+#endif
 
     zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE,
                                              capture_route, &capture));
@@ -244,16 +282,19 @@ ZTEST(ccsds_tm_frame, test_idle_output_includes_asm_and_rs_parity)
     zassert_false(ccsds_tm_frame_test_run_cycle(NULL, NULL));
 
     tm_frame = &capture.frame[TEST_TM_FRAME_OFFSET];
-    parity = &capture.frame[TEST_TM_FRAME_OFFSET + TEST_TM_FRAME_LEN];
-    ccsds_rs_encode(tm_frame, expected_parity);
-
     zassert_equal(capture.frame[0], TEST_TM_ASM0);
     zassert_equal(capture.frame[1], TEST_TM_ASM1);
     zassert_equal(capture.frame[2], TEST_TM_ASM2);
     zassert_equal(capture.frame[3], TEST_TM_ASM3);
+
+#ifdef CONFIG_AKIRA_CCSDS_RS
+    parity = &capture.frame[TEST_TM_FRAME_OFFSET + TEST_TM_FRAME_LEN];
+    ccsds_rs_encode(tm_frame, expected_parity);
     zassert_mem_equal(parity, expected_parity, sizeof(expected_parity));
-}
+#else
+    ARG_UNUSED(tm_frame);
 #endif
+}
 
 #ifdef CONFIG_AKIRA_CCSDS_TM_FECF
 ZTEST(ccsds_tm_frame, test_idle_output_includes_fecf_before_rs_parity)
@@ -376,6 +417,34 @@ ZTEST(ccsds_tm_frame, test_active_output_header_packet_fill_and_zero_ocf)
     for (size_t i = 0u; i < TEST_TM_OCF_LEN; i++) {
         zassert_equal(tm_frame[ocf_offset + i], 0u);
     }
+}
+
+ZTEST(ccsds_tm_frame, test_active_output_carries_provider_clcw_in_ocf)
+{
+    static const uint8_t packet[] = {
+        0x08, 0x23, 0xc0, 0x05, 0x00, 0x01, 0xab, 0xcd
+    };
+    struct tm_capture capture = {0};
+    const uint8_t *tm_frame;
+    size_t data_len;
+    size_t ocf_offset;
+    static const uint8_t expected_ocf[] = {0x01u, 0x0fu, 0xffu, 0xfau};
+
+    zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE,
+                                             capture_route, &capture));
+    zassert_ok(ccsds_tm_frame_set_vc_route(4u, CCSDS_TM_ROUTE_ARCHIVE));
+    zassert_ok(ccsds_tm_frame_set_clcw_provider(fixed_clcw_provider, NULL));
+    zassert_ok(ccsds_tm_frame_add(4u, packet, sizeof(packet), K_NO_WAIT));
+
+    zassert_true(ccsds_tm_frame_test_run_cycle(NULL, NULL));
+
+    tm_frame = &capture.frame[TEST_TM_FRAME_OFFSET];
+    data_len = TEST_TM_FRAME_LEN - TEST_TM_PRIMARY_HDR_LEN - TEST_TM_OCF_LEN -
+               TEST_TM_FECF_LEN;
+    ocf_offset = TEST_TM_PRIMARY_HDR_LEN + data_len;
+
+    zassert_mem_equal(&tm_frame[ocf_offset], expected_ocf,
+                      sizeof(expected_ocf));
 }
 
 ZTEST(ccsds_tm_frame, test_active_output_packs_multiple_queued_packets)
@@ -527,16 +596,19 @@ ZTEST(ccsds_tm_frame, test_active_output_counters_increment_predictably)
     zassert_equal(second_frame[3], 1u);
 }
 
-#ifdef CONFIG_AKIRA_CCSDS_RS
 ZTEST(ccsds_tm_frame, test_active_output_includes_asm_and_rs_parity)
 {
     static const uint8_t packet[] = {
         0x08, 0x01, 0xc0, 0x00, 0x00, 0x00, 0xaa
     };
     struct tm_capture capture = {0};
+#ifdef CONFIG_AKIRA_CCSDS_RS
     uint8_t expected_parity[CCSDS_RS_INTERLEAVED_PARITY_LEN];
+#endif
     const uint8_t *tm_frame;
+#ifdef CONFIG_AKIRA_CCSDS_RS
     const uint8_t *parity;
+#endif
 
     zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE,
                                              capture_route, &capture));
@@ -546,16 +618,19 @@ ZTEST(ccsds_tm_frame, test_active_output_includes_asm_and_rs_parity)
     zassert_true(ccsds_tm_frame_test_run_cycle(NULL, NULL));
 
     tm_frame = &capture.frame[TEST_TM_FRAME_OFFSET];
-    parity = &capture.frame[TEST_TM_FRAME_OFFSET + TEST_TM_FRAME_LEN];
-    ccsds_rs_encode(tm_frame, expected_parity);
-
     zassert_equal(capture.frame[0], TEST_TM_ASM0);
     zassert_equal(capture.frame[1], TEST_TM_ASM1);
     zassert_equal(capture.frame[2], TEST_TM_ASM2);
     zassert_equal(capture.frame[3], TEST_TM_ASM3);
+
+#ifdef CONFIG_AKIRA_CCSDS_RS
+    parity = &capture.frame[TEST_TM_FRAME_OFFSET + TEST_TM_FRAME_LEN];
+    ccsds_rs_encode(tm_frame, expected_parity);
     zassert_mem_equal(parity, expected_parity, sizeof(expected_parity));
-}
+#else
+    ARG_UNUSED(tm_frame);
 #endif
+}
 
 #ifdef CONFIG_AKIRA_CCSDS_TM_FECF
 ZTEST(ccsds_tm_frame, test_active_output_includes_fecf_before_rs_parity)
