@@ -1,7 +1,10 @@
 #include <zephyr/kernel.h>
 #include <zephyr/ztest.h>
 
+#include <string.h>
+
 #include "ccsds/ccsds_crc16.h"
+#include "ccsds/ccsds_rnd.h"
 #include "ccsds/ccsds_rs.h"
 #include "ccsds/ccsds_tm_frame.h"
 
@@ -52,10 +55,22 @@ bool ccsds_tm_frame_test_run_cycle(k_timeout_t *next_delay, uint8_t *vcid);
 
 struct tm_capture {
     uint8_t vcid;
+    uint8_t raw_frame[TEST_TM_CODED_LEN];
     uint8_t frame[TEST_TM_CODED_LEN];
     size_t len;
     uint8_t calls;
 };
+
+static void derandomize_captured_frame(uint8_t *frame, size_t frame_len)
+{
+#ifdef CONFIG_AKIRA_CCSDS_TM_RND
+    zassert_true(frame_len >= TEST_TM_ASM_LEN);
+    ccsds_rnd_apply(&frame[TEST_TM_ASM_LEN], frame_len - TEST_TM_ASM_LEN);
+#else
+    ARG_UNUSED(frame);
+    ARG_UNUSED(frame_len);
+#endif
+}
 
 static int capture_route(uint8_t vcid, const uint8_t *frame, size_t frame_len,
                          void *user_data)
@@ -69,7 +84,9 @@ static int capture_route(uint8_t vcid, const uint8_t *frame, size_t frame_len,
     capture->vcid = vcid;
     capture->len = frame_len;
     capture->calls++;
+    memcpy(capture->raw_frame, frame, frame_len);
     memcpy(capture->frame, frame, frame_len);
+    derandomize_captured_frame(capture->frame, frame_len);
 
     return 0;
 }
@@ -295,6 +312,40 @@ ZTEST(ccsds_tm_frame, test_idle_output_includes_asm_and_rs_parity)
     ARG_UNUSED(tm_frame);
 #endif
 }
+
+#ifdef CONFIG_AKIRA_CCSDS_TM_RND
+ZTEST(ccsds_tm_frame, test_idle_output_randomizes_after_asm_and_includes_rs_parity)
+{
+    struct tm_capture capture = {0};
+
+    zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE,
+                                             capture_route, &capture));
+    zassert_ok(ccsds_tm_frame_set_vc_route(TEST_TM_IDLE_VC_ID,
+                                           CCSDS_TM_ROUTE_ARCHIVE));
+
+    zassert_false(ccsds_tm_frame_test_run_cycle(NULL, NULL));
+
+    zassert_mem_equal(capture.raw_frame, capture.frame, TEST_TM_ASM_LEN);
+    zassert_equal(capture.raw_frame[0], TEST_TM_ASM0);
+    zassert_equal(capture.raw_frame[1], TEST_TM_ASM1);
+    zassert_equal(capture.raw_frame[2], TEST_TM_ASM2);
+    zassert_equal(capture.raw_frame[3], TEST_TM_ASM3);
+
+    zassert_not_equal(memcmp(&capture.raw_frame[TEST_TM_ASM_LEN],
+                             &capture.frame[TEST_TM_ASM_LEN],
+                             capture.len - TEST_TM_ASM_LEN),
+                      0);
+
+#ifdef CONFIG_AKIRA_CCSDS_RS
+    zassert_not_equal(memcmp(&capture.raw_frame[TEST_TM_FRAME_OFFSET +
+                                                TEST_TM_FRAME_LEN],
+                             &capture.frame[TEST_TM_FRAME_OFFSET +
+                                            TEST_TM_FRAME_LEN],
+                             CCSDS_RS_INTERLEAVED_PARITY_LEN),
+                      0);
+#endif
+}
+#endif
 
 #ifdef CONFIG_AKIRA_CCSDS_TM_FECF
 ZTEST(ccsds_tm_frame, test_idle_output_includes_fecf_before_rs_parity)

@@ -8,6 +8,10 @@
 #include "ccsds_crc16.h"
 #include "ccsds_space_packet.h"
 
+#ifdef CONFIG_AKIRA_CCSDS_TM_RND
+#include "ccsds_rnd.h"
+#endif
+
 #ifdef CONFIG_AKIRA_CCSDS_RS
 #include "ccsds_rs.h"
 #endif
@@ -367,28 +371,31 @@ out_unlock:
 
 static size_t code_transfer_frame(const uint8_t *frame, size_t frame_len)
 {
+    size_t coded_len;
+
+    coded_frame_buf[0] = CCSDS_TM_ASM0;
+    coded_frame_buf[1] = CCSDS_TM_ASM1;
+    coded_frame_buf[2] = CCSDS_TM_ASM2;
+    coded_frame_buf[3] = CCSDS_TM_ASM3;
+    memcpy(&coded_frame_buf[CCSDS_TM_ASM_LEN], frame, frame_len);
+
 #ifdef CONFIG_AKIRA_CCSDS_RS
     uint8_t *parity = &coded_frame_buf[CCSDS_TM_ASM_LEN + frame_len];
 
     __ASSERT_NO_MSG(frame_len == CCSDS_RS_INTERLEAVED_DATA_LEN);
 
-    coded_frame_buf[0] = CCSDS_TM_ASM0;
-    coded_frame_buf[1] = CCSDS_TM_ASM1;
-    coded_frame_buf[2] = CCSDS_TM_ASM2;
-    coded_frame_buf[3] = CCSDS_TM_ASM3;
-    memcpy(&coded_frame_buf[CCSDS_TM_ASM_LEN], frame, frame_len);
     ccsds_rs_encode(frame, parity);
-
-    return CCSDS_TM_CODED_FRAME_LEN;
+    coded_len = CCSDS_TM_CODED_FRAME_LEN;
 #else
-    coded_frame_buf[0] = CCSDS_TM_ASM0;
-    coded_frame_buf[1] = CCSDS_TM_ASM1;
-    coded_frame_buf[2] = CCSDS_TM_ASM2;
-    coded_frame_buf[3] = CCSDS_TM_ASM3;
-    memcpy(&coded_frame_buf[CCSDS_TM_ASM_LEN], frame, frame_len);
-
-    return CCSDS_TM_ASM_LEN + frame_len;
+    coded_len = CCSDS_TM_ASM_LEN + frame_len;
 #endif
+
+#ifdef CONFIG_AKIRA_CCSDS_TM_RND
+    ccsds_rnd_apply(&coded_frame_buf[CCSDS_TM_ASM_LEN],
+                    coded_len - CCSDS_TM_ASM_LEN);
+#endif
+
+    return coded_len;
 }
 
 static bool vc_has_pending_bytes(uint8_t vcid)

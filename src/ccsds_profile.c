@@ -8,6 +8,10 @@
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/util.h>
 
+#ifdef CONFIG_AKIRA_CCSDS_TC_RND
+#include "ccsds_rnd.h"
+#endif
+
 LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
 
 #define CCSDS_TC_CONTROL_UNLOCK 0x00u
@@ -320,6 +324,10 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
         record_tc_result(&result, cltu_len, ret);
         return ret;
     }
+
+#ifdef CONFIG_AKIRA_CCSDS_TC_RND
+    ccsds_rnd_apply(profile->frame_buf, tc_frame_len);
+#endif
 
     ret = ccsds_tc_frame_decode(profile->frame_buf, tc_frame_len, &frame);
     if (ret != 0) {
