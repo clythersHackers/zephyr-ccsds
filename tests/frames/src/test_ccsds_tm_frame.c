@@ -114,17 +114,17 @@ static void tm_frame_setup(void *fixture)
 {
     ARG_UNUSED(fixture);
 
-    zassert_ok(ccsds_tm_frame_init());
+    ccsds_tm_frame_init();
 }
 
 ZTEST(ccsds_tm_frame, test_start_stop_updates_generator_state)
 {
     zassert_false(ccsds_tm_frame_test_is_running());
 
-    zassert_ok(ccsds_tm_frame_start(K_MSEC(5), K_MSEC(50)));
+    ccsds_tm_frame_start(K_MSEC(5), K_MSEC(50));
     zassert_true(ccsds_tm_frame_test_is_running());
 
-    zassert_ok(ccsds_tm_frame_stop());
+    ccsds_tm_frame_stop();
     zassert_false(ccsds_tm_frame_test_is_running());
 }
 
@@ -134,7 +134,7 @@ ZTEST(ccsds_tm_frame, test_idle_cycle_uses_idle_delay)
     uint8_t vcid;
     bool active;
 
-    zassert_ok(ccsds_tm_frame_start(K_MSEC(5), K_MSEC(50)));
+    ccsds_tm_frame_start(K_MSEC(5), K_MSEC(50));
 
     active = ccsds_tm_frame_test_run_cycle(&next_delay, &vcid);
 
@@ -142,7 +142,7 @@ ZTEST(ccsds_tm_frame, test_idle_cycle_uses_idle_delay)
     zassert_equal(vcid, 7u);
     zassert_true(K_TIMEOUT_EQ(next_delay, K_MSEC(50)));
 
-    zassert_ok(ccsds_tm_frame_stop());
+    ccsds_tm_frame_stop();
 }
 
 ZTEST(ccsds_tm_frame, test_idle_cycle_emits_one_routed_output)
@@ -250,7 +250,7 @@ ZTEST(ccsds_tm_frame, test_idle_output_carries_provider_clcw_in_ocf)
                                              capture_route, &capture));
     zassert_ok(ccsds_tm_frame_set_vc_route(TEST_TM_IDLE_VC_ID,
                                            CCSDS_TM_ROUTE_ARCHIVE));
-    zassert_ok(ccsds_tm_frame_set_clcw_provider(fixed_clcw_provider, NULL));
+    ccsds_tm_frame_set_clcw_provider(fixed_clcw_provider, NULL);
 
     zassert_false(ccsds_tm_frame_test_run_cycle(NULL, NULL));
 
@@ -332,7 +332,7 @@ ZTEST(ccsds_tm_frame, test_active_cycle_uses_active_delay_and_lowest_vc)
 
     zassert_ok(ccsds_tm_frame_add(3u, packet, sizeof(packet), K_NO_WAIT));
     zassert_ok(ccsds_tm_frame_add(1u, packet, sizeof(packet), K_NO_WAIT));
-    zassert_ok(ccsds_tm_frame_start(K_MSEC(5), K_MSEC(50)));
+    ccsds_tm_frame_start(K_MSEC(5), K_MSEC(50));
 
     active = ccsds_tm_frame_test_run_cycle(&next_delay, &vcid);
 
@@ -340,7 +340,7 @@ ZTEST(ccsds_tm_frame, test_active_cycle_uses_active_delay_and_lowest_vc)
     zassert_equal(vcid, 1u);
     zassert_true(K_TIMEOUT_EQ(next_delay, K_MSEC(5)));
 
-    zassert_ok(ccsds_tm_frame_stop());
+    ccsds_tm_frame_stop();
 }
 
 ZTEST(ccsds_tm_frame, test_active_cycle_emits_packet_frame_on_selected_route)
@@ -433,7 +433,7 @@ ZTEST(ccsds_tm_frame, test_active_output_carries_provider_clcw_in_ocf)
     zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE,
                                              capture_route, &capture));
     zassert_ok(ccsds_tm_frame_set_vc_route(4u, CCSDS_TM_ROUTE_ARCHIVE));
-    zassert_ok(ccsds_tm_frame_set_clcw_provider(fixed_clcw_provider, NULL));
+    ccsds_tm_frame_set_clcw_provider(fixed_clcw_provider, NULL);
     zassert_ok(ccsds_tm_frame_add(4u, packet, sizeof(packet), K_NO_WAIT));
 
     zassert_true(ccsds_tm_frame_test_run_cycle(NULL, NULL));

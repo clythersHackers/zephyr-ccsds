@@ -54,11 +54,9 @@ struct ccsds_profile_tc_rx_stats {
  *
  * @param profile Profile instance to initialize.
  * @param router Router used after TC frame decode and packet extraction.
- *
- * @return 0 on success.
  */
-int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
-                             struct ccsds_router *router);
+void ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
+                              struct ccsds_router *router);
 
 /**
  * @brief Decode one complete TC CLTU and dispatch its Space Packet by APID.

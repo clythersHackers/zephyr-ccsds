@@ -61,10 +61,8 @@ typedef int (*ccsds_tm_clcw_provider_t)(uint32_t *clcw, void *user_data);
  *
  * This must be called before any other TM frame API. It resets VC pipe state,
  * frame counters, route registrations, and per-VC route masks.
- *
- * @return 0 on success.
  */
-int ccsds_tm_frame_init(void);
+void ccsds_tm_frame_init(void);
 
 /**
  * @brief Register a callback for one TM route bit.
@@ -85,11 +83,9 @@ int ccsds_tm_frame_register_route(ccsds_tm_route_mask_t route_bit,
  *
  * @param fn Provider callback, or NULL to clear.
  * @param user_data Opaque pointer passed to @p fn.
- *
- * @return 0 on success.
  */
-int ccsds_tm_frame_set_clcw_provider(ccsds_tm_clcw_provider_t fn,
-                                     void *user_data);
+void ccsds_tm_frame_set_clcw_provider(ccsds_tm_clcw_provider_t fn,
+                                      void *user_data);
 
 /**
  * @brief Set the route mask used by a virtual channel.
@@ -122,17 +118,13 @@ int ccsds_tm_frame_get_vc_route(uint8_t vcid,
  *
  * @param active_delay Delay after a packet-bearing generator cycle.
  * @param idle_delay Delay after an idle generator cycle.
- *
- * @return 0 on success.
  */
-int ccsds_tm_frame_start(k_timeout_t active_delay, k_timeout_t idle_delay);
+void ccsds_tm_frame_start(k_timeout_t active_delay, k_timeout_t idle_delay);
 
 /**
  * @brief Stop the internal TM frame generator service.
- *
- * @return 0 on success.
  */
-int ccsds_tm_frame_stop(void);
+void ccsds_tm_frame_stop(void);
 
 /**
  * @brief Admit one complete encoded CCSDS Space Packet into a VC queue.

@@ -38,10 +38,8 @@ struct ccsds_router {
  * @brief Initialize an APID router table.
  *
  * @param router Router instance to clear.
- *
- * @return 0 on success.
  */
-int ccsds_router_init(struct ccsds_router *router);
+void ccsds_router_init(struct ccsds_router *router);
 
 /**
  * @brief Register or replace a handler for one APID.

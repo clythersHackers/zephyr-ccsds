@@ -266,16 +266,14 @@ int ccsds_profile_tc_clcw_provider(uint32_t *clcw, void *user_data)
     return ccsds_profile_tc_build_clcw(profile, clcw);
 }
 
-int ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
-                             struct ccsds_router *router)
+void ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
+                              struct ccsds_router *router)
 {
     __ASSERT(profile != NULL, "TC profile is NULL");
     __ASSERT(router != NULL, "TC profile router is NULL");
 
     memset(profile, 0, sizeof(*profile));
     profile->router = router;
-
-    return 0;
 }
 
 int ccsds_profile_tc_set_accepted_vcid(struct ccsds_profile_tc_rx *profile,

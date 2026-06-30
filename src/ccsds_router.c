@@ -5,12 +5,11 @@
 
 #include <zephyr/sys/__assert.h>
 
-int ccsds_router_init(struct ccsds_router *router)
+void ccsds_router_init(struct ccsds_router *router)
 {
     __ASSERT(router != NULL, "CCSDS router is NULL");
 
     memset(router, 0, sizeof(*router));
-    return 0;
 }
 
 int ccsds_router_register_apid(struct ccsds_router *router, uint16_t apid,

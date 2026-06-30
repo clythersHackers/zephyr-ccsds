@@ -31,9 +31,9 @@ static bool ccsds_cltu_has_tail_sequence(const uint8_t *cltu, size_t cltu_len)
     return true;
 }
 
-int ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
-                       ccsds_cltu_frame_cb_t on_frame,
-                       void *user_data)
+void ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
+                        ccsds_cltu_frame_cb_t on_frame,
+                        void *user_data)
 {
     __ASSERT(rx != NULL, "CLTU receiver is NULL");
     __ASSERT(on_frame != NULL, "CLTU frame callback is NULL");
@@ -41,7 +41,6 @@ int ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
     memset(rx, 0, sizeof(*rx));
     rx->on_frame = on_frame;
     rx->user_data = user_data;
-    return 0;
 }
 
 void ccsds_cltu_rx_reset(struct ccsds_cltu_rx *rx)

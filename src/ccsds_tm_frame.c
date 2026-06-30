@@ -511,11 +511,11 @@ static __maybe_unused void route_frame(uint8_t vcid, const uint8_t *frame,
 }
 
 /* Reset TM VC queues, frame counters, and all route registration state. */
-int ccsds_tm_frame_init(void)
+void ccsds_tm_frame_init(void)
 {
     generator_init_once();
 
-    (void)ccsds_tm_frame_stop();
+    ccsds_tm_frame_stop();
 
     for (size_t i = 0u; i < ARRAY_SIZE(vcs); i++) {
         vcs[i].pending_len = 0u;
@@ -538,8 +538,6 @@ int ccsds_tm_frame_init(void)
     generator_last_vcid = CCSDS_TM_MAX_VC_ID;
     generator_last_cycle_active = false;
     initialized = true;
-
-    return 0;
 }
 
 /* Register one callback in the route table for a single supported route bit. */
@@ -562,15 +560,13 @@ int ccsds_tm_frame_register_route(ccsds_tm_route_mask_t route_bit,
     return 0;
 }
 
-int ccsds_tm_frame_set_clcw_provider(ccsds_tm_clcw_provider_t fn,
-                                     void *user_data)
+void ccsds_tm_frame_set_clcw_provider(ccsds_tm_clcw_provider_t fn,
+                                      void *user_data)
 {
     __ASSERT(initialized, "ccsds_tm_frame_init() not called");
 
     clcw_provider.fn = fn;
     clcw_provider.user_data = user_data;
-
-    return 0;
 }
 
 /* Store the route mask that future generated frames for a VC will use. */
@@ -603,7 +599,7 @@ int ccsds_tm_frame_get_vc_route(uint8_t vcid,
     return 0;
 }
 
-int ccsds_tm_frame_start(k_timeout_t active_delay, k_timeout_t idle_delay)
+void ccsds_tm_frame_start(k_timeout_t active_delay, k_timeout_t idle_delay)
 {
     generator_init_once();
 
@@ -616,11 +612,9 @@ int ccsds_tm_frame_start(k_timeout_t active_delay, k_timeout_t idle_delay)
     k_mutex_unlock(&generator_lock);
 
     (void)k_work_schedule(&generator_work, K_NO_WAIT);
-
-    return 0;
 }
 
-int ccsds_tm_frame_stop(void)
+void ccsds_tm_frame_stop(void)
 {
     generator_init_once();
 
@@ -629,8 +623,6 @@ int ccsds_tm_frame_stop(void)
     k_mutex_unlock(&generator_lock);
 
     (void)k_work_cancel_delayable(&generator_work);
-
-    return 0;
 }
 
 #ifdef CONFIG_ZTEST

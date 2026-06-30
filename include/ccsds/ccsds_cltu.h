@@ -71,12 +71,10 @@ static inline bool ccsds_cltu_is_start_sequence(const uint8_t *candidate)
  * @param rx Receiver state to initialize.
  * @param on_frame Callback invoked for each decoded TC frame.
  * @param user_data Opaque pointer passed to @p on_frame.
- *
- * @return 0 on success.
  */
-int ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
-                       ccsds_cltu_frame_cb_t on_frame,
-                       void *user_data);
+void ccsds_cltu_rx_init(struct ccsds_cltu_rx *rx,
+                        ccsds_cltu_frame_cb_t on_frame,
+                        void *user_data);
 
 /**
  * @brief Drop any partially acquired CLTU while keeping receiver configuration.
