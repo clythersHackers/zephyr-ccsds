@@ -281,11 +281,13 @@ ZTEST(ccsds_profile, test_tc_dispatch_rejects_set_vr_during_lockout)
     ccsds_profile_tc_rx_init(&profile, &router);
     profile.vc_state.lockout_flag = true;
     profile.vc_state.report_value = 0x10u;
+    profile.vc_state.farm_b_counter = 2u;
 
     zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
                   -EACCES);
     zassert_true(profile.vc_state.lockout_flag);
     zassert_equal(profile.vc_state.report_value, 0x10u);
+    zassert_equal(profile.vc_state.farm_b_counter, 3u);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_advances_expected_fsn)
@@ -325,6 +327,26 @@ ZTEST(ccsds_profile, test_tc_dispatch_advances_farm_b_after_scid_vc_accept)
     zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
                   -ENOENT);
     zassert_equal(profile.vc_state.farm_b_counter, 0u);
+}
+
+ZTEST(ccsds_profile, test_tc_dispatch_does_not_advance_farm_b_on_cltu_reject)
+{
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len = 0u;
+
+    build_empty_segment_cltu(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 0u, 0u, cltu,
+                             sizeof(cltu), &cltu_len);
+    cltu[0] = 0x00u;
+
+    ccsds_router_init(&router);
+    ccsds_profile_tc_rx_init(&profile, &router);
+    profile.vc_state.farm_b_counter = 2u;
+
+    zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
+                  -EINVAL);
+    zassert_equal(profile.vc_state.farm_b_counter, 2u);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_does_not_advance_farm_b_on_wrong_scid)
@@ -435,11 +457,13 @@ ZTEST(ccsds_profile, test_tc_dispatch_rejects_data_frame_during_lockout)
     ccsds_profile_tc_rx_init(&profile, &router);
     profile.vc_state.lockout_flag = true;
     profile.vc_state.report_value = TEST_SHORT_DATA_FSN;
+    profile.vc_state.farm_b_counter = 1u;
 
     zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
                   -EACCES);
     zassert_true(profile.vc_state.lockout_flag);
     zassert_equal(profile.vc_state.report_value, TEST_SHORT_DATA_FSN);
+    zassert_equal(profile.vc_state.farm_b_counter, 2u);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_requests_retransmit_on_fsn_jump)
@@ -454,6 +478,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_requests_retransmit_on_fsn_jump)
     ccsds_router_init(&router);
     ccsds_profile_tc_rx_init(&profile, &router);
     profile.vc_state.report_value = (uint8_t)(TEST_SHORT_DATA_FSN - 1u);
+    profile.vc_state.farm_b_counter = 2u;
 
     zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
                   -EAGAIN);
@@ -461,6 +486,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_requests_retransmit_on_fsn_jump)
                   (uint8_t)(TEST_SHORT_DATA_FSN - 1u));
     zassert_true(profile.vc_state.retransmit_flag);
     zassert_false(profile.vc_state.lockout_flag);
+    zassert_equal(profile.vc_state.farm_b_counter, 3u);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_discards_prior_fsn_without_retransmit)
@@ -475,6 +501,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_discards_prior_fsn_without_retransmit)
     ccsds_router_init(&router);
     ccsds_profile_tc_rx_init(&profile, &router);
     profile.vc_state.report_value = (uint8_t)(TEST_SHORT_DATA_FSN + 1u);
+    profile.vc_state.farm_b_counter = 3u;
 
     zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
                   -EAGAIN);
@@ -482,6 +509,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_discards_prior_fsn_without_retransmit)
                   (uint8_t)(TEST_SHORT_DATA_FSN + 1u));
     zassert_false(profile.vc_state.retransmit_flag);
     zassert_false(profile.vc_state.lockout_flag);
+    zassert_equal(profile.vc_state.farm_b_counter, 0u);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_locks_out_on_fsn_window_boundary)
@@ -497,6 +525,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_locks_out_on_fsn_window_boundary)
     ccsds_profile_tc_rx_init(&profile, &router);
     profile.vc_state.report_value =
         (uint8_t)(TEST_SHORT_DATA_FSN - TEST_COP1_HALF_WINDOW);
+    profile.vc_state.farm_b_counter = 0u;
 
     zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
                   -EAGAIN);
@@ -504,6 +533,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_locks_out_on_fsn_window_boundary)
                   (uint8_t)(TEST_SHORT_DATA_FSN - TEST_COP1_HALF_WINDOW));
     zassert_false(profile.vc_state.retransmit_flag);
     zassert_true(profile.vc_state.lockout_flag);
+    zassert_equal(profile.vc_state.farm_b_counter, 1u);
 }
 
 ZTEST(ccsds_profile, test_tc_build_clcw_packs_report_fields)
