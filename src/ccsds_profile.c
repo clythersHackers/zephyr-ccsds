@@ -11,6 +11,7 @@
 #ifdef CONFIG_AKIRA_CCSDS_TC_RND
 #include "ccsds_rnd.h"
 #endif
+#include "ccsds_tc_segment.h"
 
 LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -48,6 +49,13 @@ struct ccsds_profile_tc_cltu_result {
     enum ccsds_profile_tc_cltu_stage stage;
     int error;
     size_t tc_frame_len;
+    uint32_t packets_dispatched;
+};
+
+struct ccsds_profile_segment_dispatch {
+    struct ccsds_profile_tc_rx *profile;
+    struct ccsds_router *router;
+    uint32_t packets_dispatched;
 };
 
 static void init_tc_result(struct ccsds_profile_tc_cltu_result *result)
@@ -94,7 +102,7 @@ static void record_tc_result(const struct ccsds_profile_tc_cltu_result *result,
         tc_rx_stats.dispatch_failures++;
         break;
     case CCSDS_PROFILE_TC_CLTU_STAGE_DISPATCHED:
-        tc_rx_stats.packets_dispatched++;
+        tc_rx_stats.packets_dispatched += result->packets_dispatched;
         break;
     case CCSDS_PROFILE_TC_CLTU_STAGE_NONE:
     default:
@@ -109,34 +117,96 @@ static void record_tc_result(const struct ccsds_profile_tc_cltu_result *result,
     k_mutex_unlock(&tc_rx_stats_lock);
 }
 
-static int validate_tc_vcid(const struct ccsds_profile_tc_rx *profile,
-                            const struct ccsds_tc_frame *frame)
+static int dispatch_tc_segment_part(
+    const struct ccsds_tc_segment_part *part, void *user_data)
 {
-    uint8_t vcid;
+    struct ccsds_profile_segment_dispatch *dispatch = user_data;
+    struct ccsds_profile_tc_reassembly *reassembly;
+    struct ccsds_space_packet packet;
+    int ret;
 
-    __ASSERT(profile != NULL, "TC profile is NULL");
-    __ASSERT(frame != NULL, "TC frame is NULL");
+    __ASSERT(part != NULL, "TC segment part is NULL");
+    __ASSERT(dispatch != NULL, "TC segment dispatch context is NULL");
+    __ASSERT(dispatch->profile != NULL, "TC segment profile is NULL");
+    __ASSERT(dispatch->router != NULL, "TC segment router is NULL");
 
-    if (frame->virtual_channel_id >= CCSDS_TC_VC_COUNT) {
+    reassembly = &dispatch->profile->reassembly;
+
+    if (part->starts_packet && part->ends_packet) {
+        if (reassembly->active) {
+            return -EBUSY;
+        }
+
+        ret = ccsds_space_packet_decode(part->data, part->data_len, &packet);
+        if (ret != 0) {
+            return ret;
+        }
+
+        ret = ccsds_router_dispatch(dispatch->router, &packet);
+        if (ret != 0) {
+            return ret;
+        }
+
+        dispatch->packets_dispatched++;
+        return 0;
+    }
+
+    if (part->starts_packet) {
+        if (reassembly->active) {
+            memset(reassembly, 0, sizeof(*reassembly));
+            return -EBUSY;
+        }
+
+        if (part->packet_len == 0u ||
+            part->packet_len > sizeof(reassembly->buffer)) {
+            return -EMSGSIZE;
+        }
+
+        reassembly->active = true;
+        reassembly->map_id = part->map_id;
+        reassembly->len = 0u;
+        reassembly->expected_len = part->packet_len;
+    } else if (!reassembly->active || reassembly->map_id != part->map_id) {
+        memset(reassembly, 0, sizeof(*reassembly));
         return -EINVAL;
     }
 
-    vcid = frame->virtual_channel_id;
-    if (vcid != profile->accepted_vcid) {
-        LOG_WRN("TC frame rejected for unconfigured VC: vcid=%u accepted=%u",
-                vcid, profile->accepted_vcid);
-        return -EACCES;
+    if (part->data_len > sizeof(reassembly->buffer) - reassembly->len) {
+        memset(reassembly, 0, sizeof(*reassembly));
+        return -EMSGSIZE;
     }
 
+    memcpy(&reassembly->buffer[reassembly->len], part->data, part->data_len);
+    reassembly->len += part->data_len;
+
+    if (reassembly->expected_len > sizeof(reassembly->buffer) ||
+        reassembly->len > reassembly->expected_len) {
+        memset(reassembly, 0, sizeof(*reassembly));
+        return -EMSGSIZE;
+    }
+
+    if (!part->ends_packet) {
+        return 0;
+    }
+
+    if (reassembly->len != reassembly->expected_len) {
+        memset(reassembly, 0, sizeof(*reassembly));
+        return -EMSGSIZE;
+    }
+
+    ret = ccsds_space_packet_decode(reassembly->buffer, reassembly->len,
+                                    &packet);
+    if (ret == 0) {
+        ret = ccsds_router_dispatch(dispatch->router, &packet);
+    }
+
+    memset(reassembly, 0, sizeof(*reassembly));
+    if (ret != 0) {
+        return ret;
+    }
+
+    dispatch->packets_dispatched++;
     return 0;
-}
-
-static bool is_tc_unlock_control_frame(const struct ccsds_tc_frame *frame)
-{
-    __ASSERT(frame != NULL, "TC frame is NULL");
-
-    return frame->control_command && frame->data_len > 0u &&
-           frame->data[0] == CCSDS_TC_CONTROL_UNLOCK;
 }
 
 static int handle_tc_control_frame(struct ccsds_profile_tc_rx *profile,
@@ -154,7 +224,7 @@ static int handle_tc_control_frame(struct ccsds_profile_tc_rx *profile,
 
     vcid = frame->virtual_channel_id;
 
-    if (is_tc_unlock_control_frame(frame)) {
+    if (frame->data[0] == CCSDS_TC_CONTROL_UNLOCK) {
         profile->vc_state.lockout_flag = false;
         profile->vc_state.retransmit_flag = false;
         LOG_INF("TC control UNLOCK: vcid=%u", vcid);
@@ -299,7 +369,11 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 {
     struct ccsds_profile_tc_cltu_result result;
     struct ccsds_tc_frame frame;
-    struct ccsds_space_packet packet;
+    struct ccsds_tc_segment segment;
+    struct ccsds_profile_segment_dispatch dispatch = {
+        .profile = profile,
+        .router = profile->router,
+    };
     size_t tc_frame_len = 0u;
     int ret;
 
@@ -344,13 +418,24 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
             frame.control_command ? 1u : 0u, frame.frame_sequence_number,
             frame.data_len);
 
-    ret = validate_tc_vcid(profile, &frame);
-    if (ret != 0) {
+    if (frame.virtual_channel_id >= CCSDS_TC_VC_COUNT) {
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME,
-                            ret);
-        record_tc_result(&result, cltu_len, ret);
-        return ret;
+                            -EINVAL);
+        record_tc_result(&result, cltu_len, -EINVAL);
+        return -EINVAL;
     }
+
+    if (frame.virtual_channel_id != profile->accepted_vcid) {
+        LOG_WRN("TC frame rejected for unconfigured VC: vcid=%u accepted=%u",
+                frame.virtual_channel_id, profile->accepted_vcid);
+        set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME,
+                            -EACCES);
+        record_tc_result(&result, cltu_len, -EACCES);
+        return -EACCES;
+    }
+
+    profile->vc_state.farm_b_counter =
+        (uint8_t)((profile->vc_state.farm_b_counter + 1u) & 0x03u);
 
     if (frame.control_command) {
         ret = handle_tc_control_frame(profile, &frame);
@@ -367,14 +452,15 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
         return ret;
     }
 
-    ret = ccsds_tc_frame_extract_packet(&frame, &packet);
+    ret = ccsds_tc_segment_decode_frame(&frame, &segment);
     if (ret != 0) {
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_PACKET, ret);
         record_tc_result(&result, cltu_len, ret);
         return ret;
     }
 
-    ret = ccsds_router_dispatch(profile->router, &packet);
+    ret = ccsds_tc_segment_walk_parts(&segment, dispatch_tc_segment_part,
+                                      &dispatch);
     if (ret != 0) {
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_ROUTER, ret);
         record_tc_result(&result, cltu_len, ret);
@@ -383,6 +469,7 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 
     result.stage = CCSDS_PROFILE_TC_CLTU_STAGE_DISPATCHED;
     result.error = 0;
+    result.packets_dispatched = dispatch.packets_dispatched;
     record_tc_result(&result, cltu_len, 0);
 
     return 0;

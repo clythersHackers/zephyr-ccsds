@@ -2,9 +2,12 @@
 #include <stddef.h>
 #include <string.h>
 
+#include <zephyr/sys/util.h>
 #include <zephyr/ztest.h>
 
+#include "ccsds/ccsds_bch.h"
 #include "ccsds/ccsds_profile.h"
+#include "ccsds/ccsds_tc_segment.h"
 
 static int hex_nibble(char c)
 {
@@ -67,6 +70,144 @@ static const char short_data_cltu_hex[] =
     "eb90007b00191fc0186410c006000b100e16020000010319008800bbe915465555d2c5c5c5c5c5c5c579";
 #define TEST_SHORT_DATA_FSN 0x1fu
 #define TEST_COP1_HALF_WINDOW (CONFIG_AKIRA_CCSDS_COP1_WINDOW_SIZE / 2u)
+#define TEST_TC_HDR_LEN 5u
+#define TEST_SEG_HDR(boundary, map_id) \
+    (uint8_t)((((uint8_t)(boundary) & 0x03u) << 6) | ((map_id) & 0x3fu))
+
+struct packet_capture {
+    uint16_t apid;
+    uint8_t payload[32];
+    size_t payload_len;
+    uint32_t count;
+};
+
+static void build_tc_frame(uint8_t *buf, size_t len, uint16_t scid,
+                           uint8_t vcid, uint8_t fsn)
+{
+    uint16_t frame_len_field = (uint16_t)(len - 1u);
+
+    memset(buf, 0, len);
+    buf[0] = (uint8_t)((scid >> 8) & 0x03u);
+    buf[1] = (uint8_t)scid;
+    buf[2] = (uint8_t)(((vcid & 0x3fu) << 2) |
+                       ((frame_len_field >> 8) & 0x03u));
+    buf[3] = (uint8_t)frame_len_field;
+    buf[4] = fsn;
+}
+
+static void build_tc_packet(uint8_t *buf, size_t payload_len, uint16_t apid,
+                            uint8_t seed)
+{
+    uint16_t length_field = (uint16_t)(payload_len - 1u);
+
+    memset(buf, 0, CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + payload_len);
+    buf[0] = (uint8_t)(0x10u | ((apid >> 8) & 0x07u));
+    buf[1] = (uint8_t)apid;
+    buf[2] = (uint8_t)(CCSDS_SEQUENCE_UNSEGMENTED << 6);
+    buf[4] = (uint8_t)(length_field >> 8);
+    buf[5] = (uint8_t)length_field;
+
+    for (size_t i = 0u; i < payload_len; i++) {
+        buf[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + i] = seed + (uint8_t)i;
+    }
+}
+
+static void encode_bch_block(const uint8_t data[CCSDS_BCH_DATA_SIZE],
+                             uint8_t block[CCSDS_BCH_BLOCK_SIZE])
+{
+    uint8_t decoded[CCSDS_BCH_DATA_SIZE];
+    int corrected_bit;
+
+    memcpy(block, data, CCSDS_BCH_DATA_SIZE);
+    for (uint16_t parity = 0u; parity <= UINT8_MAX; parity++) {
+        block[CCSDS_BCH_DATA_SIZE] = (uint8_t)parity;
+        if (ccsds_bch_decode_block(block, decoded, &corrected_bit) ==
+                CCSDS_BCH_OK &&
+            memcmp(decoded, data, CCSDS_BCH_DATA_SIZE) == 0) {
+            return;
+        }
+    }
+
+    zassert_unreachable("no BCH parity byte found");
+}
+
+static void encode_frame_cltu(const uint8_t *frame, size_t frame_len,
+                              uint8_t *cltu, size_t cltu_cap,
+                              size_t *cltu_len)
+{
+    static const uint8_t tail[CCSDS_BCH_BLOCK_SIZE] = {
+        0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0x79,
+    };
+    uint8_t block_data[CCSDS_BCH_DATA_SIZE];
+    size_t block_count =
+        (frame_len + CCSDS_BCH_DATA_SIZE - 1u) / CCSDS_BCH_DATA_SIZE;
+    size_t needed = 2u + (block_count * CCSDS_BCH_BLOCK_SIZE) +
+                    CCSDS_BCH_BLOCK_SIZE;
+
+    zassert_true(needed <= cltu_cap);
+
+    cltu[0] = 0xebu;
+    cltu[1] = 0x90u;
+
+    for (size_t block = 0u; block < block_count; block++) {
+        size_t frame_offset = block * CCSDS_BCH_DATA_SIZE;
+        size_t remaining = frame_len - frame_offset;
+        size_t copy_len = MIN(remaining, CCSDS_BCH_DATA_SIZE);
+
+        memset(block_data, 0x55, sizeof(block_data));
+        memcpy(block_data, &frame[frame_offset], copy_len);
+        encode_bch_block(block_data,
+                         &cltu[2u + (block * CCSDS_BCH_BLOCK_SIZE)]);
+    }
+
+    memcpy(&cltu[2u + (block_count * CCSDS_BCH_BLOCK_SIZE)], tail,
+           sizeof(tail));
+    *cltu_len = needed;
+}
+
+static void build_tc_segment_cltu(enum ccsds_tc_segment_boundary boundary,
+                                  uint8_t map_id, const uint8_t *segment_data,
+                                  size_t segment_data_len, uint8_t fsn,
+                                  uint8_t *cltu, size_t cltu_cap,
+                                  size_t *cltu_len)
+{
+    uint8_t frame[TEST_TC_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN + 32u];
+    size_t frame_len = TEST_TC_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN +
+                       segment_data_len;
+
+    zassert_true(frame_len <= sizeof(frame));
+    build_tc_frame(frame, frame_len, CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 0u,
+                   fsn);
+    frame[TEST_TC_HDR_LEN] = TEST_SEG_HDR(boundary, map_id);
+    memcpy(&frame[TEST_TC_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN], segment_data,
+           segment_data_len);
+    encode_frame_cltu(frame, frame_len, cltu, cltu_cap, cltu_len);
+}
+
+static void build_empty_segment_cltu(uint16_t scid, uint8_t vcid, uint8_t fsn,
+                                     uint8_t *cltu, size_t cltu_cap,
+                                     size_t *cltu_len)
+{
+    uint8_t frame[TEST_TC_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN];
+
+    build_tc_frame(frame, sizeof(frame), scid, vcid, fsn);
+    frame[TEST_TC_HDR_LEN] = TEST_SEG_HDR(CCSDS_TC_SEGMENT_UNSEGMENTED, 0u);
+    encode_frame_cltu(frame, sizeof(frame), cltu, cltu_cap, cltu_len);
+}
+
+static int capture_packet_handler(const struct ccsds_space_packet *packet,
+                                  void *user_data)
+{
+    struct packet_capture *capture = user_data;
+
+    capture->apid = packet->apid;
+    capture->payload_len = packet->payload_len;
+    zassert_true(packet->payload_len <= sizeof(capture->payload));
+    memcpy(capture->payload, packet->payload, packet->payload_len);
+    capture->count++;
+
+    return 0;
+}
 
 ZTEST(ccsds_profile, test_tc_dispatch_accepts_unlock_control_frame)
 {
@@ -162,9 +303,123 @@ ZTEST(ccsds_profile, test_tc_dispatch_advances_expected_fsn)
     profile.vc_state.retransmit_flag = true;
 
     zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
-                  -EMSGSIZE);
+                  -ENOENT);
     zassert_equal(profile.vc_state.report_value, 0x20u);
     zassert_false(profile.vc_state.retransmit_flag);
+}
+
+ZTEST(ccsds_profile, test_tc_dispatch_advances_farm_b_after_scid_vc_accept)
+{
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len = 0u;
+
+    zassert_ok(decode_hex_fixture(short_data_cltu_hex, cltu, sizeof(cltu),
+                                  &cltu_len));
+    ccsds_router_init(&router);
+    ccsds_profile_tc_rx_init(&profile, &router);
+    profile.vc_state.report_value = TEST_SHORT_DATA_FSN;
+    profile.vc_state.farm_b_counter = 3u;
+
+    zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
+                  -ENOENT);
+    zassert_equal(profile.vc_state.farm_b_counter, 0u);
+}
+
+ZTEST(ccsds_profile, test_tc_dispatch_does_not_advance_farm_b_on_wrong_scid)
+{
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len = 0u;
+    uint16_t wrong_scid = (CONFIG_AKIRA_CCSDS_SPACECRAFT_ID + 1u) & 0x03ffu;
+
+    build_empty_segment_cltu(wrong_scid, 0u, 0u, cltu, sizeof(cltu),
+                             &cltu_len);
+    ccsds_router_init(&router);
+    ccsds_profile_tc_rx_init(&profile, &router);
+    profile.vc_state.farm_b_counter = 2u;
+
+    zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
+                  -EACCES);
+    zassert_equal(profile.vc_state.farm_b_counter, 2u);
+}
+
+ZTEST(ccsds_profile, test_tc_dispatch_does_not_advance_farm_b_on_wrong_vc)
+{
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len = 0u;
+
+    build_empty_segment_cltu(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 1u, 0u, cltu,
+                             sizeof(cltu), &cltu_len);
+    ccsds_router_init(&router);
+    ccsds_profile_tc_rx_init(&profile, &router);
+    profile.vc_state.farm_b_counter = 2u;
+
+    zassert_equal(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len),
+                  -EACCES);
+    zassert_equal(profile.vc_state.farm_b_counter, 2u);
+}
+
+ZTEST(ccsds_profile, test_tc_dispatch_reassembles_segmented_packet)
+{
+    enum {
+        TEST_APID = 0x123u,
+        TEST_MAP_ID = 5u,
+        TEST_PACKET_PAYLOAD_LEN = 10u,
+    };
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    struct ccsds_profile_tc_rx_stats stats;
+    struct packet_capture capture = {0};
+    uint8_t packet[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN +
+                   TEST_PACKET_PAYLOAD_LEN];
+    uint8_t cltu[3][CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len[3] = {0};
+
+    build_tc_packet(packet, TEST_PACKET_PAYLOAD_LEN, TEST_APID, 0x40u);
+    build_tc_segment_cltu(CCSDS_TC_SEGMENT_FIRST, TEST_MAP_ID, packet, 10u,
+                          0u, cltu[0], sizeof(cltu[0]), &cltu_len[0]);
+    build_tc_segment_cltu(CCSDS_TC_SEGMENT_CONTINUATION, TEST_MAP_ID,
+                          &packet[10], 3u, 1u, cltu[1], sizeof(cltu[1]),
+                          &cltu_len[1]);
+    build_tc_segment_cltu(CCSDS_TC_SEGMENT_LAST, TEST_MAP_ID, &packet[13], 3u,
+                          2u, cltu[2], sizeof(cltu[2]), &cltu_len[2]);
+
+    ccsds_router_init(&router);
+    zassert_ok(ccsds_router_register_apid(&router, TEST_APID,
+                                          capture_packet_handler, &capture));
+    ccsds_profile_tc_rx_init(&profile, &router);
+
+    zassert_ok(ccsds_profile_tc_cltu_dispatch(&profile, cltu[0],
+                                              cltu_len[0]));
+    zassert_equal(capture.count, 0u);
+    zassert_true(profile.reassembly.active);
+    zassert_equal(profile.reassembly.map_id, TEST_MAP_ID);
+    zassert_equal(profile.reassembly.expected_len, sizeof(packet));
+
+    zassert_ok(ccsds_profile_tc_cltu_dispatch(&profile, cltu[1],
+                                              cltu_len[1]));
+    zassert_equal(capture.count, 0u);
+    zassert_true(profile.reassembly.active);
+
+    zassert_ok(ccsds_profile_tc_cltu_dispatch(&profile, cltu[2],
+                                              cltu_len[2]));
+    zassert_false(profile.reassembly.active);
+    zassert_equal(capture.count, 1u);
+    zassert_equal(capture.apid, TEST_APID);
+    zassert_equal(capture.payload_len, TEST_PACKET_PAYLOAD_LEN);
+    zassert_mem_equal(capture.payload,
+                      &packet[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN],
+                      TEST_PACKET_PAYLOAD_LEN);
+
+    ccsds_profile_tc_rx_get_stats(&stats);
+    zassert_equal(stats.cltus_received, 3u);
+    zassert_equal(stats.packets_dispatched, 1u);
+    zassert_equal(stats.dispatch_failures, 0u);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_rejects_data_frame_during_lockout)

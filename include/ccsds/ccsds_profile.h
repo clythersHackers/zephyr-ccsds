@@ -25,10 +25,19 @@ struct ccsds_profile_tc_vc_state {
     uint8_t report_value;
 };
 
+struct ccsds_profile_tc_reassembly {
+    bool active;
+    uint8_t map_id;
+    size_t len;
+    size_t expected_len;
+    uint8_t buffer[CONFIG_AKIRA_CCSDS_TC_MAX_SPACE_PACKET_LEN];
+};
+
 struct ccsds_profile_tc_rx {
     struct ccsds_router *router;
     uint8_t accepted_vcid;
     struct ccsds_profile_tc_vc_state vc_state;
+    struct ccsds_profile_tc_reassembly reassembly;
     uint8_t frame_buf[CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN];
 };
 
