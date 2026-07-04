@@ -581,10 +581,16 @@ ZTEST(ccsds_cfdp_pdu, test_metadata_encode_decode_round_trip)
                       sizeof(destination) - 1u);
 }
 
-ZTEST(ccsds_cfdp_pdu, test_metadata_encode_supports_modular_checksum)
+ZTEST(ccsds_cfdp_pdu, test_metadata_encode_supports_standard_checksum_types)
 {
     const uint8_t source[] = "a";
     const uint8_t destination[] = "b";
+    const enum ccsds_cfdp_checksum_type supported[] = {
+        CCSDS_CFDP_CHECKSUM_TYPE_MODULAR,
+        CCSDS_CFDP_CHECKSUM_TYPE_CRC32C,
+        CCSDS_CFDP_CHECKSUM_TYPE_IEEE_802_3_FCS,
+        CCSDS_CFDP_CHECKSUM_TYPE_NULL,
+    };
     ccsds_cfdp_metadata_pdu_t metadata = {
         .header = base_header(1u, 1u),
         .closure_requested = true,
@@ -605,10 +611,14 @@ ZTEST(ccsds_cfdp_pdu, test_metadata_encode_supports_modular_checksum)
     metadata.header.transmission_mode =
         CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED;
 
-    zassert_equal(ccsds_cfdp_encode_metadata(&metadata, buf, sizeof(buf),
-                                             &len),
-                  CCSDS_CFDP_STATUS_OK);
-    zassert_equal(buf[8], 0x00u);
+    for (size_t i = 0u; i < ARRAY_SIZE(supported); i++) {
+        metadata.checksum_type = supported[i];
+
+        zassert_equal(ccsds_cfdp_encode_metadata(&metadata, buf, sizeof(buf),
+                                                 &len),
+                      CCSDS_CFDP_STATUS_OK);
+        zassert_equal(buf[8] & 0x0fu, supported[i]);
+    }
 }
 
 ZTEST(ccsds_cfdp_pdu, test_metadata_rejects_unsupported_checksum_type)

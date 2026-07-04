@@ -62,6 +62,8 @@ static uint64_t read_be_uint(const uint8_t *buf, uint8_t len)
 static bool checksum_type_is_supported(enum ccsds_cfdp_checksum_type type)
 {
     return type == CCSDS_CFDP_CHECKSUM_TYPE_MODULAR ||
+           type == CCSDS_CFDP_CHECKSUM_TYPE_CRC32C ||
+           type == CCSDS_CFDP_CHECKSUM_TYPE_IEEE_802_3_FCS ||
            type == CCSDS_CFDP_CHECKSUM_TYPE_NULL;
 }
 

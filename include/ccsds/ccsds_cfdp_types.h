@@ -82,6 +82,8 @@ enum ccsds_cfdp_file_status {
 
 enum ccsds_cfdp_checksum_type {
     CCSDS_CFDP_CHECKSUM_TYPE_MODULAR = 0,
+    CCSDS_CFDP_CHECKSUM_TYPE_CRC32C = 2,
+    CCSDS_CFDP_CHECKSUM_TYPE_IEEE_802_3_FCS = 3,
     CCSDS_CFDP_CHECKSUM_TYPE_NULL = 15,
 };
 

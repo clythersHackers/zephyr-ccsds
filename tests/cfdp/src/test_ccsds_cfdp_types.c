@@ -63,6 +63,8 @@ ZTEST(ccsds_cfdp_types, test_finished_and_checksum_enums)
     zassert_equal(CCSDS_CFDP_FILE_STATUS_RETAINED, 2);
     zassert_equal(CCSDS_CFDP_FILE_STATUS_UNREPORTED, 3);
     zassert_equal(CCSDS_CFDP_CHECKSUM_TYPE_MODULAR, 0);
+    zassert_equal(CCSDS_CFDP_CHECKSUM_TYPE_CRC32C, 2);
+    zassert_equal(CCSDS_CFDP_CHECKSUM_TYPE_IEEE_802_3_FCS, 3);
     zassert_equal(CCSDS_CFDP_CHECKSUM_TYPE_NULL, 15);
 }
 
