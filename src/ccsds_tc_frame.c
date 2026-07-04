@@ -6,6 +6,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/sys/byteorder.h>
 
 #define CCSDS_TC_PRIMARY_HDR_LEN 5u
 #define CCSDS_TC_FILL_BYTE 0x55u
@@ -42,8 +43,8 @@ int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
         return -EINVAL;
     }
 
-    uint16_t frame_len_field = (uint16_t)((((uint16_t)buf[2] & 0x03u) << 8) |
-                                          buf[3]);
+    uint16_t word1 = sys_get_be16(&buf[2]);
+    uint16_t frame_len_field = word1 & CCSDS_TC_MAX_FRAME_LEN_FIELD;
     size_t frame_len = (size_t)frame_len_field + 1u;
     if (frame_len < CCSDS_TC_PRIMARY_HDR_LEN) {
         LOG_WRN("TC frame length field too small: %zu bytes", frame_len);
@@ -64,8 +65,8 @@ int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
         return -EMSGSIZE;
     }
 
-    uint16_t spacecraft_id = (uint16_t)((((uint16_t)buf[0] & 0x03u) << 8) |
-                                        buf[1]);
+    uint16_t word0 = sys_get_be16(&buf[0]);
+    uint16_t spacecraft_id = word0 & CCSDS_TC_MAX_SCID;
     if (spacecraft_id != CONFIG_AKIRA_CCSDS_SPACECRAFT_ID) {
         LOG_WRN("TC frame wrong spacecraft id: scid=%u expected=%u",
                 spacecraft_id, CONFIG_AKIRA_CCSDS_SPACECRAFT_ID);
@@ -73,7 +74,7 @@ int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
     }
 
     frame->spacecraft_id = spacecraft_id;
-    frame->virtual_channel_id = (uint8_t)((buf[2] >> 2) & 0x3fu);
+    frame->virtual_channel_id = (uint8_t)((word1 >> 10) & 0x3fu);
     frame->bypass = CCSDS_TC_BYPASS(buf[0]);
     frame->control_command = CCSDS_TC_CONTROL(buf[0]);
     frame->frame_sequence_number = buf[4];

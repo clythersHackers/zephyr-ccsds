@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <zephyr/sys/__assert.h>
+#include <zephyr/sys/byteorder.h>
 
 size_t ccsds_space_packet_encoded_len(size_t payload_len)
 {
@@ -20,9 +21,9 @@ int ccsds_space_packet_decode(const uint8_t *buf, size_t len,
         return -EINVAL;
     }
 
-    uint16_t word0 = ((uint16_t)buf[0] << 8) | buf[1];
-    uint16_t word1 = ((uint16_t)buf[2] << 8) | buf[3];
-    uint16_t length_field = ((uint16_t)buf[4] << 8) | buf[5];
+    uint16_t word0 = sys_get_be16(&buf[0]);
+    uint16_t word1 = sys_get_be16(&buf[2]);
+    uint16_t length_field = sys_get_be16(&buf[4]);
     size_t payload_len = (size_t)length_field + 1u;
 
     if (len < CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + payload_len) {
@@ -68,12 +69,9 @@ int ccsds_space_packet_encode(const struct ccsds_space_packet *packet,
                      (packet->sequence_count & 0x3fffu);
     uint16_t length_field = (uint16_t)(packet->payload_len - 1u);
 
-    buf[0] = (uint8_t)(word0 >> 8);
-    buf[1] = (uint8_t)word0;
-    buf[2] = (uint8_t)(word1 >> 8);
-    buf[3] = (uint8_t)word1;
-    buf[4] = (uint8_t)(length_field >> 8);
-    buf[5] = (uint8_t)length_field;
+    sys_put_be16(word0, &buf[0]);
+    sys_put_be16(word1, &buf[2]);
+    sys_put_be16(length_field, &buf[4]);
 
     memcpy(&buf[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN], packet->payload,
            packet->payload_len);

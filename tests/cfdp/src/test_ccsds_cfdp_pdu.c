@@ -526,4 +526,283 @@ ZTEST(ccsds_cfdp_pdu, test_tlv_walks_multiple_entries_with_consumed_lengths)
     zassert_equal(offset, sizeof(buf));
 }
 
+ZTEST(ccsds_cfdp_pdu, test_metadata_encode_decode_round_trip)
+{
+    const uint8_t source[] = "src";
+    const uint8_t destination[] = "dst";
+    ccsds_cfdp_metadata_pdu_t metadata = {
+        .header = base_header(1u, 1u),
+        .closure_requested = true,
+        .checksum_type = CCSDS_CFDP_CHECKSUM_TYPE_NULL,
+        .file_size = 0x00010203u,
+        .source_filename = {
+            .value = source,
+            .len = sizeof(source) - 1u,
+        },
+        .destination_filename = {
+            .value = destination,
+            .len = sizeof(destination) - 1u,
+        },
+    };
+    ccsds_cfdp_metadata_pdu_t decoded;
+    uint8_t buf[32];
+    size_t len;
+    size_t consumed;
+    const uint8_t expected[] = {
+        0x24u, 0x00u, 0x0eu, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x4fu, 0x00u, 0x01u, 0x02u, 0x03u,
+        0x03u, 's', 'r', 'c',
+        0x03u, 'd', 's', 't',
+    };
+
+    metadata.header.pdu_data_field_len = 0u;
+
+    zassert_equal(ccsds_cfdp_encode_metadata(&metadata, buf, sizeof(buf),
+                                             &len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(len, sizeof(expected));
+    zassert_mem_equal(buf, expected, sizeof(expected));
+
+    memset(&decoded, 0, sizeof(decoded));
+    zassert_equal(ccsds_cfdp_decode_metadata(buf, len, &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(consumed, len);
+    zassert_equal(decoded.header.pdu_data_field_len, 0x000eu);
+    zassert_equal(decoded.closure_requested, true);
+    zassert_equal(decoded.checksum_type, CCSDS_CFDP_CHECKSUM_TYPE_NULL);
+    zassert_equal(decoded.file_size, 0x00010203u);
+    zassert_equal(decoded.source_filename.len, sizeof(source) - 1u);
+    zassert_true(decoded.source_filename.value == &buf[14]);
+    zassert_mem_equal(decoded.source_filename.value, source,
+                      sizeof(source) - 1u);
+    zassert_equal(decoded.destination_filename.len, sizeof(destination) - 1u);
+    zassert_true(decoded.destination_filename.value == &buf[18]);
+    zassert_mem_equal(decoded.destination_filename.value, destination,
+                      sizeof(destination) - 1u);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_metadata_encode_supports_modular_checksum)
+{
+    const uint8_t source[] = "a";
+    const uint8_t destination[] = "b";
+    ccsds_cfdp_metadata_pdu_t metadata = {
+        .header = base_header(1u, 1u),
+        .closure_requested = true,
+        .checksum_type = CCSDS_CFDP_CHECKSUM_TYPE_MODULAR,
+        .file_size = 1u,
+        .source_filename = {
+            .value = source,
+            .len = sizeof(source) - 1u,
+        },
+        .destination_filename = {
+            .value = destination,
+            .len = sizeof(destination) - 1u,
+        },
+    };
+    uint8_t buf[24];
+    size_t len;
+
+    metadata.header.transmission_mode =
+        CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED;
+
+    zassert_equal(ccsds_cfdp_encode_metadata(&metadata, buf, sizeof(buf),
+                                             &len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(buf[8], 0x00u);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_metadata_rejects_unsupported_checksum_type)
+{
+    const uint8_t source[] = "src";
+    const uint8_t destination[] = "dst";
+    ccsds_cfdp_metadata_pdu_t metadata = {
+        .header = base_header(1u, 1u),
+        .closure_requested = true,
+        .checksum_type = (enum ccsds_cfdp_checksum_type)1,
+        .file_size = 1u,
+        .source_filename = {
+            .value = source,
+            .len = sizeof(source) - 1u,
+        },
+        .destination_filename = {
+            .value = destination,
+            .len = sizeof(destination) - 1u,
+        },
+    };
+    ccsds_cfdp_metadata_pdu_t decoded;
+    uint8_t buf[32];
+    size_t len;
+    size_t consumed;
+    const uint8_t unsupported_checksum[] = {
+        0x24u, 0x00u, 0x0eu, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x41u, 0x00u, 0x00u, 0x00u, 0x01u,
+        0x03u, 's', 'r', 'c',
+        0x03u, 'd', 's', 't',
+    };
+
+    zassert_equal(ccsds_cfdp_encode_metadata(&metadata, buf, sizeof(buf),
+                                             &len),
+                  CCSDS_CFDP_STATUS_UNSUPPORTED_CHECKSUM);
+    zassert_equal(ccsds_cfdp_decode_metadata(unsupported_checksum,
+                                             sizeof(unsupported_checksum),
+                                             &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_UNSUPPORTED_CHECKSUM);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_metadata_rejects_filenames_above_configured_limit)
+{
+    uint8_t long_name[CCSDS_CFDP_MAX_FILENAME_LEN + 1u];
+    const uint8_t destination[] = "dst";
+    ccsds_cfdp_metadata_pdu_t metadata = {
+        .header = base_header(1u, 1u),
+        .closure_requested = true,
+        .checksum_type = CCSDS_CFDP_CHECKSUM_TYPE_MODULAR,
+        .file_size = 1u,
+        .source_filename = {
+            .value = long_name,
+            .len = sizeof(long_name),
+        },
+        .destination_filename = {
+            .value = destination,
+            .len = sizeof(destination) - 1u,
+        },
+    };
+    ccsds_cfdp_metadata_pdu_t decoded;
+    uint8_t buf[96] = {
+        0x24u, 0x00u,
+        (uint8_t)(CCSDS_CFDP_MAX_FILENAME_LEN + 12u),
+        0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x00u, 0x00u, 0x00u, 0x00u, 0x01u,
+        (uint8_t)(CCSDS_CFDP_MAX_FILENAME_LEN + 1u),
+    };
+    size_t len;
+    size_t consumed;
+
+    for (size_t i = 0u; i < sizeof(long_name); i++) {
+        long_name[i] = (uint8_t)('a' + (i % 26u));
+        buf[14u + i] = long_name[i];
+    }
+    buf[14u + sizeof(long_name)] = sizeof(destination) - 1u;
+    memcpy(&buf[15u + sizeof(long_name)], destination,
+           sizeof(destination) - 1u);
+
+    zassert_equal(ccsds_cfdp_encode_metadata(&metadata, buf, sizeof(buf),
+                                             &len),
+                  CCSDS_CFDP_STATUS_INVALID_ARGUMENT);
+    zassert_equal(ccsds_cfdp_decode_metadata(buf,
+                                             15u + sizeof(long_name) +
+                                                 sizeof(destination) - 1u,
+                                             &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_INVALID_ARGUMENT);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_metadata_rejects_empty_filenames)
+{
+    const uint8_t source[] = "src";
+    const uint8_t destination[] = "dst";
+    ccsds_cfdp_metadata_pdu_t metadata = {
+        .header = base_header(1u, 1u),
+        .closure_requested = true,
+        .checksum_type = CCSDS_CFDP_CHECKSUM_TYPE_MODULAR,
+        .file_size = 1u,
+        .source_filename = {
+            .value = NULL,
+            .len = 0u,
+        },
+        .destination_filename = {
+            .value = destination,
+            .len = sizeof(destination) - 1u,
+        },
+    };
+    ccsds_cfdp_metadata_pdu_t decoded;
+    uint8_t buf[32];
+    size_t len;
+    size_t consumed;
+    const uint8_t empty_source[] = {
+        0x24u, 0x00u, 0x0bu, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x00u, 0x00u, 0x00u, 0x00u, 0x01u,
+        0x00u,
+        0x03u, 'd', 's', 't',
+    };
+    const uint8_t empty_destination[] = {
+        0x24u, 0x00u, 0x0bu, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x00u, 0x00u, 0x00u, 0x00u, 0x01u,
+        0x03u, 's', 'r', 'c',
+        0x00u,
+    };
+
+    zassert_equal(ccsds_cfdp_encode_metadata(&metadata, buf, sizeof(buf),
+                                             &len),
+                  CCSDS_CFDP_STATUS_INVALID_ARGUMENT);
+
+    metadata.source_filename.value = source;
+    metadata.source_filename.len = sizeof(source) - 1u;
+    metadata.destination_filename.value = NULL;
+    metadata.destination_filename.len = 0u;
+    zassert_equal(ccsds_cfdp_encode_metadata(&metadata, buf, sizeof(buf),
+                                             &len),
+                  CCSDS_CFDP_STATUS_INVALID_ARGUMENT);
+
+    zassert_equal(ccsds_cfdp_decode_metadata(empty_source,
+                                             sizeof(empty_source), &decoded,
+                                             &consumed),
+                  CCSDS_CFDP_STATUS_INVALID_ARGUMENT);
+    zassert_equal(ccsds_cfdp_decode_metadata(empty_destination,
+                                             sizeof(empty_destination),
+                                             &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_INVALID_ARGUMENT);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_metadata_rejects_truncated_filename_lv)
+{
+    ccsds_cfdp_metadata_pdu_t decoded;
+    size_t consumed;
+    const uint8_t truncated_destination[] = {
+        0x24u, 0x00u, 0x0du, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x00u, 0x00u, 0x00u, 0x00u, 0x01u,
+        0x03u, 's', 'r', 'c',
+        0x03u, 'd', 's',
+    };
+
+    zassert_equal(ccsds_cfdp_decode_metadata(truncated_destination,
+                                             sizeof(truncated_destination),
+                                             &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_metadata_rejects_unexpected_options)
+{
+    ccsds_cfdp_metadata_pdu_t decoded;
+    size_t consumed;
+    const uint8_t with_option[] = {
+        0x24u, 0x00u, 0x0du, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x00u, 0x00u, 0x00u, 0x00u, 0x01u,
+        0x01u, 's',
+        0x01u, 'd',
+        0x99u, 0x01u, 0xaau,
+    };
+
+    zassert_equal(ccsds_cfdp_decode_metadata(with_option, sizeof(with_option),
+                                             &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_UNSUPPORTED);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_metadata_rejects_truncated_option_tlv)
+{
+    ccsds_cfdp_metadata_pdu_t decoded;
+    size_t consumed;
+    const uint8_t truncated_option[] = {
+        0x24u, 0x00u, 0x0bu, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x00u, 0x00u, 0x00u, 0x00u, 0x01u,
+        0x01u, 's',
+        0x01u, 'd',
+        0x99u,
+    };
+
+    zassert_equal(ccsds_cfdp_decode_metadata(truncated_option,
+                                             sizeof(truncated_option),
+                                             &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+}
+
 ZTEST_SUITE(ccsds_cfdp_pdu, NULL, NULL, NULL, NULL, NULL);

@@ -50,6 +50,17 @@ struct ccsds_cfdp_tlv {
 
 typedef struct ccsds_cfdp_tlv ccsds_cfdp_tlv_t;
 
+struct ccsds_cfdp_metadata_pdu {
+    ccsds_cfdp_pdu_header_t header;
+    bool closure_requested;
+    enum ccsds_cfdp_checksum_type checksum_type;
+    uint32_t file_size;
+    ccsds_cfdp_lv_t source_filename;
+    ccsds_cfdp_lv_t destination_filename;
+};
+
+typedef struct ccsds_cfdp_metadata_pdu ccsds_cfdp_metadata_pdu_t;
+
 /**
  * @brief Return the encoded fixed-header length for the selected ID lengths.
  *
@@ -148,6 +159,39 @@ enum ccsds_cfdp_status ccsds_cfdp_tlv_write(uint8_t type,
                                             const uint8_t *value,
                                             uint8_t value_len, uint8_t *buf,
                                             size_t cap, size_t *written);
+
+/**
+ * @brief Encode a complete CFDP Metadata PDU.
+ *
+ * The fixed-header PDU data field length is derived from the metadata fields.
+ *
+ * @param metadata Metadata PDU fields to encode.
+ * @param buf Output buffer.
+ * @param cap Output buffer capacity in octets.
+ * @param len Written encoded length in octets.
+ *
+ * @return CFDP status code.
+ */
+enum ccsds_cfdp_status
+ccsds_cfdp_encode_metadata(const ccsds_cfdp_metadata_pdu_t *metadata,
+                           uint8_t *buf, size_t cap, size_t *len);
+
+/**
+ * @brief Decode a complete CFDP Metadata PDU.
+ *
+ * Filename values are returned as pointer+length views into @p buf.
+ *
+ * @param buf Encoded CFDP Metadata PDU bytes.
+ * @param len Input length in octets.
+ * @param metadata Output decoded metadata PDU.
+ * @param consumed Number of PDU octets consumed.
+ *
+ * @return CFDP status code.
+ */
+enum ccsds_cfdp_status
+ccsds_cfdp_decode_metadata(const uint8_t *buf, size_t len,
+                           ccsds_cfdp_metadata_pdu_t *metadata,
+                           size_t *consumed);
 
 #ifdef __cplusplus
 }

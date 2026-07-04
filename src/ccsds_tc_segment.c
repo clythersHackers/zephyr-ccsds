@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <zephyr/sys/__assert.h>
+#include <zephyr/sys/byteorder.h>
 
 #define CCSDS_TC_SEGMENT_BOUNDARY_MASK 0x03u
 #define CCSDS_TC_SEGMENT_MAP_MASK 0x3fu
@@ -19,7 +20,7 @@ static bool segment_ends_packet(enum ccsds_tc_segment_boundary boundary)
 
 static size_t encoded_packet_len(const uint8_t *packet)
 {
-    uint16_t length_field = ((uint16_t)packet[4] << 8) | packet[5];
+    uint16_t length_field = sys_get_be16(&packet[4]);
 
     return CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + (size_t)length_field + 1u;
 }

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <zephyr/sys/util.h>
+#include <zephyr/sys/byteorder.h>
 
 #include "ccsds_crc16.h"
 #include "ccsds_space_packet.h"
@@ -108,7 +109,7 @@ static void route_frame(uint8_t vcid, const uint8_t *frame, size_t frame_len);
 /* Return the total packet length encoded in the CCSDS primary header. */
 static size_t packet_total_len(const uint8_t *packet)
 {
-    uint16_t length_field = ((uint16_t)packet[4] << 8) | packet[5];
+    uint16_t length_field = sys_get_be16(&packet[4]);
 
     return CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + (size_t)length_field + 1u;
 }
@@ -145,20 +146,6 @@ static uint8_t route_bit_index(ccsds_tm_route_mask_t route_bit)
     return bit_num;
 }
 
-static void write_be16(uint8_t *buf, uint16_t value)
-{
-    buf[0] = (uint8_t)(value >> 8);
-    buf[1] = (uint8_t)value;
-}
-
-static void write_be32(uint8_t *buf, uint32_t value)
-{
-    buf[0] = (uint8_t)(value >> 24);
-    buf[1] = (uint8_t)(value >> 16);
-    buf[2] = (uint8_t)(value >> 8);
-    buf[3] = (uint8_t)value;
-}
-
 /* Build the TM primary header using the already-latched frame counters. */
 static void build_primary_header(uint8_t *buf, uint8_t vcid,
                                  uint16_t first_header_pointer)
@@ -174,10 +161,10 @@ static void build_primary_header(uint8_t *buf, uint8_t vcid,
             ((uint16_t)(CCSDS_TM_SEGMENT_LENGTH_ID & 0x3u) << 11) |
             (first_header_pointer & 0x7ffu);
 
-    write_be16(&buf[0], word0);
+    sys_put_be16(word0, &buf[0]);
     buf[2] = mcfc;
     buf[3] = vcs[vcid].vcfc;
-    write_be16(&buf[4], word2);
+    sys_put_be16(word2, &buf[4]);
 }
 
 /* Append the optional TM FECF at the end of the transfer frame body. */
@@ -188,7 +175,7 @@ static void append_fecf(void)
     size_t fecf_offset = CCSDS_TM_FRAME_LEN - CCSDS_TM_FECF_LEN;
 
     fecf = ccsds_crc16_compute(frame_buf, fecf_offset);
-    write_be16(&frame_buf[fecf_offset], fecf);
+    sys_put_be16(fecf, &frame_buf[fecf_offset]);
 #endif
 }
 
@@ -204,7 +191,7 @@ static void append_ocf(size_t ocf_offset)
         return;
     }
 
-    write_be32(&frame_buf[ocf_offset], clcw);
+    sys_put_be32(clcw, &frame_buf[ocf_offset]);
 }
 
 /* Advance master and selected virtual-channel frame counters after emit. */
@@ -225,10 +212,10 @@ static void fill_idle_space_packet(uint8_t *buf, size_t len)
         return;
     }
 
-    write_be16(&buf[0], CCSDS_TM_IDLE_APID);
-    write_be16(&buf[2], ((uint16_t)CCSDS_SEQUENCE_UNSEGMENTED << 14));
-    write_be16(&buf[4],
-               (uint16_t)(len - CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN - 1u));
+    sys_put_be16(CCSDS_TM_IDLE_APID, &buf[0]);
+    sys_put_be16(((uint16_t)CCSDS_SEQUENCE_UNSEGMENTED << 14), &buf[2]);
+    sys_put_be16((uint16_t)(len - CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN - 1u),
+                 &buf[4]);
     memset(&buf[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN], 0,
            len - CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN);
 }
