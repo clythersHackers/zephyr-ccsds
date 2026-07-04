@@ -998,4 +998,197 @@ ZTEST(ccsds_cfdp_pdu, test_filedata_encode_rejects_short_output_buffer)
                   CCSDS_CFDP_STATUS_BUFFER_TOO_SMALL);
 }
 
+ZTEST(ccsds_cfdp_pdu, test_eof_encode_decode_round_trip_no_error)
+{
+    ccsds_cfdp_eof_pdu_t eof = {
+        .header = base_header(1u, 1u),
+        .condition_code = CCSDS_CFDP_CONDITION_NO_ERROR,
+        .file_checksum = 0x01020304u,
+        .file_size = 0x05060708u,
+    };
+    ccsds_cfdp_eof_pdu_t decoded;
+    uint8_t buf[24];
+    size_t len;
+    size_t consumed;
+    const uint8_t expected[] = {
+        0x24u, 0x00u, 0x0au, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x04u, 0x00u, 0x01u, 0x02u, 0x03u, 0x04u,
+        0x05u, 0x06u, 0x07u, 0x08u,
+    };
+
+    eof.header.pdu_data_field_len = 0u;
+
+    zassert_equal(ccsds_cfdp_encode_eof(&eof, buf, sizeof(buf), &len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(len, sizeof(expected));
+    zassert_mem_equal(buf, expected, sizeof(expected));
+
+    memset(&decoded, 0, sizeof(decoded));
+    zassert_equal(ccsds_cfdp_decode_eof(buf, len, &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(consumed, len);
+    zassert_equal(decoded.header.pdu_type,
+                  CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE);
+    zassert_equal(decoded.header.pdu_data_field_len, 10u);
+    zassert_equal(decoded.condition_code, CCSDS_CFDP_CONDITION_NO_ERROR);
+    zassert_equal(decoded.file_checksum, 0x01020304u);
+    zassert_equal(decoded.file_size, 0x05060708u);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_eof_encode_decode_round_trip_nonzero_condition)
+{
+    ccsds_cfdp_eof_pdu_t eof = {
+        .header = base_header(2u, 2u),
+        .condition_code = CCSDS_CFDP_CONDITION_FILE_CHECKSUM_FAILURE,
+        .file_checksum = 0xa1a2a3a4u,
+        .file_size = 0x10203040u,
+    };
+    ccsds_cfdp_eof_pdu_t decoded;
+    uint8_t buf[24];
+    size_t len;
+    size_t consumed;
+    const uint8_t expected[] = {
+        0x24u, 0x00u, 0x0au, 0x11u, 0x00u, 0x12u, 0x00u,
+        0x34u, 0x00u, 0x56u, 0x04u, 0x50u, 0xa1u, 0xa2u,
+        0xa3u, 0xa4u, 0x10u, 0x20u, 0x30u, 0x40u,
+    };
+
+    eof.header.source_entity_id = 0x12u;
+    eof.header.transaction_sequence_number = 0x34u;
+    eof.header.destination_entity_id = 0x56u;
+
+    zassert_equal(ccsds_cfdp_encode_eof(&eof, buf, sizeof(buf), &len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(len, sizeof(expected));
+    zassert_mem_equal(buf, expected, sizeof(expected));
+
+    memset(&decoded, 0, sizeof(decoded));
+    zassert_equal(ccsds_cfdp_decode_eof(buf, len, &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(consumed, len);
+    zassert_equal(decoded.condition_code,
+                  CCSDS_CFDP_CONDITION_FILE_CHECKSUM_FAILURE);
+    zassert_equal(decoded.file_checksum, 0xa1a2a3a4u);
+    zassert_equal(decoded.file_size, 0x10203040u);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_eof_decode_rejects_file_data_pdu_type)
+{
+    ccsds_cfdp_eof_pdu_t decoded;
+    size_t consumed;
+    const uint8_t buf[] = {
+        0x34u, 0x00u, 0x0au, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x04u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+    };
+
+    zassert_equal(ccsds_cfdp_decode_eof(buf, sizeof(buf), &decoded,
+                                        &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_eof_decode_rejects_non_eof_directive)
+{
+    ccsds_cfdp_eof_pdu_t decoded;
+    size_t consumed;
+    const uint8_t buf[] = {
+        0x24u, 0x00u, 0x0au, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x07u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+    };
+
+    zassert_equal(ccsds_cfdp_decode_eof(buf, sizeof(buf), &decoded,
+                                        &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_eof_rejects_large_file_mode)
+{
+    ccsds_cfdp_eof_pdu_t eof = {
+        .header = base_header(1u, 1u),
+        .condition_code = CCSDS_CFDP_CONDITION_NO_ERROR,
+        .file_checksum = 0u,
+        .file_size = 0u,
+    };
+    ccsds_cfdp_eof_pdu_t decoded;
+    uint8_t out[24];
+    size_t len;
+    size_t consumed;
+    const uint8_t encoded[] = {
+        0x25u, 0x00u, 0x0au, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x04u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+    };
+
+    eof.header.file_size_mode = CCSDS_CFDP_FILE_SIZE_LARGE;
+
+    zassert_equal(ccsds_cfdp_encode_eof(&eof, out, sizeof(out), &len),
+                  CCSDS_CFDP_STATUS_UNSUPPORTED);
+    zassert_equal(ccsds_cfdp_decode_eof(encoded, sizeof(encoded), &decoded,
+                                        &consumed),
+                  CCSDS_CFDP_STATUS_UNSUPPORTED);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_eof_decode_rejects_segment_metadata)
+{
+    ccsds_cfdp_eof_pdu_t decoded;
+    size_t consumed;
+    const uint8_t buf[] = {
+        0x24u, 0x00u, 0x0au, 0x08u, 0x12u, 0x34u, 0x56u,
+        0x04u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+    };
+
+    zassert_equal(ccsds_cfdp_decode_eof(buf, sizeof(buf), &decoded,
+                                        &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_eof_decode_rejects_truncated_fields)
+{
+    ccsds_cfdp_eof_pdu_t decoded;
+    size_t consumed;
+    const uint8_t truncated_condition[] = {
+        0x24u, 0x00u, 0x0au, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x04u,
+    };
+    const uint8_t truncated_checksum[] = {
+        0x24u, 0x00u, 0x0au, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x04u, 0x00u, 0x01u, 0x02u, 0x03u,
+    };
+    const uint8_t truncated_file_size[] = {
+        0x24u, 0x00u, 0x0au, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x04u, 0x00u, 0x01u, 0x02u, 0x03u, 0x04u,
+        0x05u, 0x06u, 0x07u,
+    };
+
+    zassert_equal(ccsds_cfdp_decode_eof(truncated_condition,
+                                        sizeof(truncated_condition),
+                                        &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+    zassert_equal(ccsds_cfdp_decode_eof(truncated_checksum,
+                                        sizeof(truncated_checksum),
+                                        &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+    zassert_equal(ccsds_cfdp_decode_eof(truncated_file_size,
+                                        sizeof(truncated_file_size),
+                                        &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_eof_encode_rejects_short_output_buffer)
+{
+    ccsds_cfdp_eof_pdu_t eof = {
+        .header = base_header(1u, 1u),
+        .condition_code = CCSDS_CFDP_CONDITION_NO_ERROR,
+        .file_checksum = 0u,
+        .file_size = 0u,
+    };
+    uint8_t buf[16];
+    size_t len;
+
+    zassert_equal(ccsds_cfdp_encode_eof(&eof, buf, sizeof(buf), &len),
+                  CCSDS_CFDP_STATUS_BUFFER_TOO_SMALL);
+}
+
 ZTEST_SUITE(ccsds_cfdp_pdu, NULL, NULL, NULL, NULL, NULL);

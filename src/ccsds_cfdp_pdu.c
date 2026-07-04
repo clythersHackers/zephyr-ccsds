@@ -8,10 +8,12 @@
 #define CCSDS_CFDP_FIXED_HEADER_MIN_LEN 4u
 #define CCSDS_CFDP_MAX_ENCODED_INT_LEN 8u
 #define CCSDS_CFDP_FILEDATA_OFFSET_LEN 4u
+#define CCSDS_CFDP_EOF_DATA_LEN 10u
 #define CCSDS_CFDP_METADATA_MIN_DATA_LEN 8u
 #define CCSDS_CFDP_METADATA_CLOSURE_REQUESTED 0x40u
 #define CCSDS_CFDP_METADATA_RESERVED_MASK 0xb0u
 #define CCSDS_CFDP_METADATA_CHECKSUM_MASK 0x0fu
+#define CCSDS_CFDP_EOF_CONDITION_MASK 0xf0u
 
 static bool encoded_int_len_is_valid(uint8_t len, uint8_t max_len)
 {
@@ -549,6 +551,125 @@ ccsds_cfdp_decode_filedata(const uint8_t *buf, size_t len,
     filedata->data_len = pdu_end - offset;
     *consumed = pdu_end;
 
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+enum ccsds_cfdp_status
+ccsds_cfdp_encode_eof(const ccsds_cfdp_eof_pdu_t *eof, uint8_t *buf,
+                      size_t cap, size_t *len)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    size_t offset;
+    enum ccsds_cfdp_status status;
+
+    __ASSERT(eof != NULL, "CFDP EOF PDU is NULL");
+    __ASSERT(buf != NULL, "CFDP EOF output buffer is NULL");
+    __ASSERT(len != NULL, "CFDP EOF length output is NULL");
+
+    if (eof->header.pdu_type != CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE ||
+        eof->header.segment_metadata_present) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    if (eof->header.file_size_mode != CCSDS_CFDP_FILE_SIZE_SMALL) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    if (eof->condition_code < CCSDS_CFDP_CONDITION_NO_ERROR ||
+        eof->condition_code > CCSDS_CFDP_CONDITION_CANCEL_REQUEST_RECEIVED) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    header = eof->header;
+    header.pdu_data_field_len = CCSDS_CFDP_EOF_DATA_LEN;
+
+    status = ccsds_cfdp_encode_header(&header, buf, cap, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if ((cap - header_len) < CCSDS_CFDP_EOF_DATA_LEN) {
+        return CCSDS_CFDP_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    offset = header_len;
+    buf[offset++] = CCSDS_CFDP_DIRECTIVE_EOF;
+    buf[offset++] = (uint8_t)((eof->condition_code & 0x0fu) << 4);
+    sys_put_be32(eof->file_checksum, &buf[offset]);
+    offset += 4u;
+    sys_put_be32(eof->file_size, &buf[offset]);
+    offset += 4u;
+
+    *len = offset;
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+enum ccsds_cfdp_status
+ccsds_cfdp_decode_eof(const uint8_t *buf, size_t len,
+                      ccsds_cfdp_eof_pdu_t *eof, size_t *consumed)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    size_t pdu_end;
+    size_t offset;
+    enum ccsds_cfdp_status status;
+
+    __ASSERT(buf != NULL, "CFDP EOF input buffer is NULL");
+    __ASSERT(eof != NULL, "CFDP EOF output is NULL");
+    __ASSERT(consumed != NULL, "CFDP EOF consumed length output is NULL");
+
+    status = ccsds_cfdp_decode_header(buf, len, &header, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if (header.pdu_type != CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE ||
+        header.segment_metadata_present) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    if (header.file_size_mode != CCSDS_CFDP_FILE_SIZE_SMALL) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    if (header.pdu_data_field_len != CCSDS_CFDP_EOF_DATA_LEN ||
+        (len - header_len) < header.pdu_data_field_len) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    pdu_end = header_len + header.pdu_data_field_len;
+    offset = header_len;
+
+    if ((pdu_end - offset) < 1u) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+    if (buf[offset++] != CCSDS_CFDP_DIRECTIVE_EOF) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    if ((pdu_end - offset) < 1u) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+    eof->condition_code =
+        (enum ccsds_cfdp_condition_code)((buf[offset++] &
+                                          CCSDS_CFDP_EOF_CONDITION_MASK) >>
+                                         4);
+
+    if ((pdu_end - offset) < 4u) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+    eof->file_checksum = sys_get_be32(&buf[offset]);
+    offset += 4u;
+
+    if ((pdu_end - offset) < 4u) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+    eof->file_size = sys_get_be32(&buf[offset]);
+    offset += 4u;
+
+    eof->header = header;
+    *consumed = offset;
     return CCSDS_CFDP_STATUS_OK;
 }
 
