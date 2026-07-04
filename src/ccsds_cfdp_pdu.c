@@ -9,11 +9,16 @@
 #define CCSDS_CFDP_MAX_ENCODED_INT_LEN 8u
 #define CCSDS_CFDP_FILEDATA_OFFSET_LEN 4u
 #define CCSDS_CFDP_EOF_DATA_LEN 10u
+#define CCSDS_CFDP_FINISHED_DATA_LEN 2u
 #define CCSDS_CFDP_METADATA_MIN_DATA_LEN 8u
 #define CCSDS_CFDP_METADATA_CLOSURE_REQUESTED 0x40u
 #define CCSDS_CFDP_METADATA_RESERVED_MASK 0xb0u
 #define CCSDS_CFDP_METADATA_CHECKSUM_MASK 0x0fu
 #define CCSDS_CFDP_EOF_CONDITION_MASK 0xf0u
+#define CCSDS_CFDP_FINISHED_CONDITION_MASK 0xf0u
+#define CCSDS_CFDP_FINISHED_SPARE_MASK 0x08u
+#define CCSDS_CFDP_FINISHED_DELIVERY_MASK 0x04u
+#define CCSDS_CFDP_FINISHED_FILE_STATUS_MASK 0x03u
 
 static bool encoded_int_len_is_valid(uint8_t len, uint8_t max_len)
 {
@@ -65,6 +70,12 @@ static bool filename_len_is_valid(const ccsds_cfdp_lv_t *filename)
     return filename->len > 0u &&
            filename->len <= CCSDS_CFDP_MAX_FILENAME_LEN &&
            filename->value != NULL;
+}
+
+static bool condition_code_is_valid(enum ccsds_cfdp_condition_code code)
+{
+    return code >= CCSDS_CFDP_CONDITION_NO_ERROR &&
+           code <= CCSDS_CFDP_CONDITION_CANCEL_REQUEST_RECEIVED;
 }
 
 size_t ccsds_cfdp_header_encoded_len(const ccsds_cfdp_pdu_header_t *header)
@@ -576,8 +587,7 @@ ccsds_cfdp_encode_eof(const ccsds_cfdp_eof_pdu_t *eof, uint8_t *buf,
         return CCSDS_CFDP_STATUS_UNSUPPORTED;
     }
 
-    if (eof->condition_code < CCSDS_CFDP_CONDITION_NO_ERROR ||
-        eof->condition_code > CCSDS_CFDP_CONDITION_CANCEL_REQUEST_RECEIVED) {
+    if (!condition_code_is_valid(eof->condition_code)) {
         return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
     }
 
@@ -669,6 +679,132 @@ ccsds_cfdp_decode_eof(const uint8_t *buf, size_t len,
     offset += 4u;
 
     eof->header = header;
+    *consumed = offset;
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+enum ccsds_cfdp_status
+ccsds_cfdp_encode_finished(const ccsds_cfdp_finished_pdu_t *finished,
+                           uint8_t *buf, size_t cap, size_t *len)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    size_t offset;
+    enum ccsds_cfdp_status status;
+
+    __ASSERT(finished != NULL, "CFDP Finished PDU is NULL");
+    __ASSERT(buf != NULL, "CFDP Finished output buffer is NULL");
+    __ASSERT(len != NULL, "CFDP Finished length output is NULL");
+
+    if (finished->header.pdu_type != CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE ||
+        finished->header.segment_metadata_present) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    if (finished->header.file_size_mode != CCSDS_CFDP_FILE_SIZE_SMALL) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    if (!condition_code_is_valid(finished->condition_code) ||
+        finished->delivery_code > CCSDS_CFDP_DELIVERY_CODE_DATA_INCOMPLETE ||
+        finished->file_status > CCSDS_CFDP_FILE_STATUS_UNREPORTED) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    header = finished->header;
+    header.pdu_data_field_len = CCSDS_CFDP_FINISHED_DATA_LEN;
+
+    status = ccsds_cfdp_encode_header(&header, buf, cap, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if ((cap - header_len) < CCSDS_CFDP_FINISHED_DATA_LEN) {
+        return CCSDS_CFDP_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    offset = header_len;
+    buf[offset++] = CCSDS_CFDP_DIRECTIVE_FINISHED;
+    buf[offset++] =
+        (uint8_t)((finished->condition_code & 0x0fu) << 4) |
+        (uint8_t)((finished->delivery_code & 0x01u) << 2) |
+        (uint8_t)(finished->file_status & CCSDS_CFDP_FINISHED_FILE_STATUS_MASK);
+
+    *len = offset;
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+enum ccsds_cfdp_status
+ccsds_cfdp_decode_finished(const uint8_t *buf, size_t len,
+                           ccsds_cfdp_finished_pdu_t *finished,
+                           size_t *consumed)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    size_t pdu_end;
+    size_t offset;
+    enum ccsds_cfdp_status status;
+    uint8_t status_byte;
+    enum ccsds_cfdp_condition_code condition_code;
+
+    __ASSERT(buf != NULL, "CFDP Finished input buffer is NULL");
+    __ASSERT(finished != NULL, "CFDP Finished output is NULL");
+    __ASSERT(consumed != NULL, "CFDP Finished consumed length output is NULL");
+
+    status = ccsds_cfdp_decode_header(buf, len, &header, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if (header.pdu_type != CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE ||
+        header.segment_metadata_present) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    if (header.file_size_mode != CCSDS_CFDP_FILE_SIZE_SMALL) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    if (header.pdu_data_field_len != CCSDS_CFDP_FINISHED_DATA_LEN ||
+        (len - header_len) < header.pdu_data_field_len) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    pdu_end = header_len + header.pdu_data_field_len;
+    offset = header_len;
+
+    if ((pdu_end - offset) < 1u) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+    if (buf[offset++] != CCSDS_CFDP_DIRECTIVE_FINISHED) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    if ((pdu_end - offset) < 1u) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+    status_byte = buf[offset++];
+    if ((status_byte & CCSDS_CFDP_FINISHED_SPARE_MASK) != 0u) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    condition_code =
+        (enum ccsds_cfdp_condition_code)((status_byte &
+                                          CCSDS_CFDP_FINISHED_CONDITION_MASK) >>
+                                         4);
+    if (!condition_code_is_valid(condition_code)) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    finished->header = header;
+    finished->condition_code = condition_code;
+    finished->delivery_code =
+        (enum ccsds_cfdp_delivery_code)((status_byte &
+                                         CCSDS_CFDP_FINISHED_DELIVERY_MASK) >>
+                                        2);
+    finished->file_status =
+        (enum ccsds_cfdp_file_status)(status_byte &
+                                      CCSDS_CFDP_FINISHED_FILE_STATUS_MASK);
     *consumed = offset;
     return CCSDS_CFDP_STATUS_OK;
 }

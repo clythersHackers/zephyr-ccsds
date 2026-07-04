@@ -79,6 +79,15 @@ struct ccsds_cfdp_eof_pdu {
 
 typedef struct ccsds_cfdp_eof_pdu ccsds_cfdp_eof_pdu_t;
 
+struct ccsds_cfdp_finished_pdu {
+    ccsds_cfdp_pdu_header_t header;
+    enum ccsds_cfdp_condition_code condition_code;
+    enum ccsds_cfdp_delivery_code delivery_code;
+    enum ccsds_cfdp_file_status file_status;
+};
+
+typedef struct ccsds_cfdp_finished_pdu ccsds_cfdp_finished_pdu_t;
+
 /**
  * @brief Return the encoded fixed-header length for the selected ID lengths.
  *
@@ -275,6 +284,41 @@ ccsds_cfdp_encode_eof(const ccsds_cfdp_eof_pdu_t *eof, uint8_t *buf,
 enum ccsds_cfdp_status
 ccsds_cfdp_decode_eof(const uint8_t *buf, size_t len,
                       ccsds_cfdp_eof_pdu_t *eof, size_t *consumed);
+
+/**
+ * @brief Encode a complete CFDP Finished PDU.
+ *
+ * The fixed-header PDU data field length is derived from the Finished fields.
+ * Only normal 32-bit file size mode without segment metadata is supported.
+ * Filestore response TLVs are not supported.
+ *
+ * @param finished Finished PDU fields to encode.
+ * @param buf Output buffer.
+ * @param cap Output buffer capacity in octets.
+ * @param len Written encoded length in octets.
+ *
+ * @return CFDP status code.
+ */
+enum ccsds_cfdp_status
+ccsds_cfdp_encode_finished(const ccsds_cfdp_finished_pdu_t *finished,
+                           uint8_t *buf, size_t cap, size_t *len);
+
+/**
+ * @brief Decode a complete CFDP Finished PDU.
+ *
+ * Filestore response TLVs are not supported and are rejected as extra data.
+ *
+ * @param buf Encoded CFDP Finished PDU bytes.
+ * @param len Input length in octets.
+ * @param finished Output decoded Finished PDU.
+ * @param consumed Number of PDU octets consumed.
+ *
+ * @return CFDP status code.
+ */
+enum ccsds_cfdp_status
+ccsds_cfdp_decode_finished(const uint8_t *buf, size_t len,
+                           ccsds_cfdp_finished_pdu_t *finished,
+                           size_t *consumed);
 
 #ifdef __cplusplus
 }
