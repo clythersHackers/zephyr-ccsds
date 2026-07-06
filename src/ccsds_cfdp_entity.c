@@ -192,6 +192,307 @@ static bool filestore_is_valid(const ccsds_cfdp_filestore_ops_t *filestore)
            filestore->read != NULL && filestore->close != NULL;
 }
 
+static bool receive_filestore_is_valid(
+    const ccsds_cfdp_filestore_ops_t *filestore)
+{
+    return filestore != NULL && filestore->open_write_tmp != NULL &&
+           filestore->read != NULL && filestore->write != NULL &&
+           filestore->close != NULL && filestore->commit_tmp != NULL &&
+           filestore->discard_tmp != NULL;
+}
+
+static bool incoming_header_is_supported(const ccsds_cfdp_entity_t *entity,
+                                         const ccsds_cfdp_pdu_header_t *header)
+{
+    return header->destination_entity_id == entity->local_entity_id &&
+           header->source_entity_id == entity->remote_entity_id &&
+           header->entity_id_len == entity->entity_id_len &&
+           header->transaction_sequence_number_len ==
+               entity->transaction_sequence_number_len &&
+           header->direction == CCSDS_CFDP_DIRECTION_TOWARD_RECEIVER &&
+           header->transmission_mode ==
+               CCSDS_CFDP_TRANSMISSION_MODE_UNACKNOWLEDGED &&
+           header->crc_flag == CCSDS_CFDP_CRC_NOT_PRESENT;
+}
+
+static ccsds_cfdp_transaction_id_t transaction_id_from_header(
+    const ccsds_cfdp_pdu_header_t *header)
+{
+    return (ccsds_cfdp_transaction_id_t){
+        .source_entity_id = header->source_entity_id,
+        .transaction_sequence_number = header->transaction_sequence_number,
+    };
+}
+
+static enum ccsds_cfdp_status receiver_match_active(
+    const ccsds_cfdp_entity_t *entity, const ccsds_cfdp_pdu_header_t *header)
+{
+    ccsds_cfdp_transaction_id_t incoming = transaction_id_from_header(header);
+
+    if (!entity->receiver.active || !entity->receiver.metadata_received) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    if (!transaction_id_matches(&entity->receiver.id, &incoming)) {
+        return CCSDS_CFDP_STATUS_TRANSACTION_BUSY;
+    }
+
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+struct receiver_checksum_read_ctx {
+    const ccsds_cfdp_filestore_ops_t *filestore;
+    void *handle;
+};
+
+static enum ccsds_cfdp_status receiver_checksum_read(void *user_data,
+                                                     uint32_t offset,
+                                                     uint8_t *buf, size_t cap,
+                                                     size_t *len)
+{
+    struct receiver_checksum_read_ctx *ctx = user_data;
+
+    if (ctx->filestore->read(ctx->filestore->user, ctx->handle, offset, buf,
+                             cap, len) != 0) {
+        return CCSDS_CFDP_STATUS_FILESTORE_REJECTION;
+    }
+
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+static enum ccsds_cfdp_status receiver_compute_checksum(
+    ccsds_cfdp_entity_t *entity, const ccsds_cfdp_filestore_ops_t *filestore,
+    uint32_t *checksum)
+{
+    ccsds_cfdp_checksum_state_t state;
+    struct receiver_checksum_read_ctx ctx = {
+        .filestore = filestore,
+        .handle = entity->receiver.file_handle,
+    };
+    uint32_t offset = 0u;
+    enum ccsds_cfdp_status status;
+
+    status = ccsds_cfdp_checksum_init(&state, entity->receiver.checksum_type);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    while (offset < entity->receiver.file_size) {
+        const size_t remaining = (size_t)(entity->receiver.file_size - offset);
+        const size_t request_len =
+            remaining < sizeof(entity->file_segment_buf) ?
+            remaining :
+            sizeof(entity->file_segment_buf);
+        size_t nread = 0u;
+
+        status = receiver_checksum_read(&ctx, offset, entity->file_segment_buf,
+                                        request_len, &nread);
+        if (status != CCSDS_CFDP_STATUS_OK) {
+            return status;
+        }
+        if (nread == 0u || nread > request_len || nread > remaining) {
+            return CCSDS_CFDP_STATUS_FILE_SIZE_ERROR;
+        }
+
+        status = ccsds_cfdp_checksum_update(&state, offset,
+                                            entity->file_segment_buf, nread);
+        if (status != CCSDS_CFDP_STATUS_OK) {
+            return status;
+        }
+
+        offset += (uint32_t)nread;
+    }
+
+    return ccsds_cfdp_checksum_finish(&state, checksum);
+}
+
+static enum ccsds_cfdp_status receiver_finish(
+    ccsds_cfdp_entity_t *entity, const ccsds_cfdp_filestore_ops_t *filestore,
+    enum ccsds_cfdp_status status)
+{
+    if (entity->receiver.file_handle_open &&
+        filestore->close(filestore->user, entity->receiver.file_handle) != 0 &&
+        status == CCSDS_CFDP_STATUS_OK) {
+        status = CCSDS_CFDP_STATUS_FILESTORE_REJECTION;
+    }
+    entity->receiver.file_handle_open = false;
+    entity->receiver.file_handle = NULL;
+
+    if (status == CCSDS_CFDP_STATUS_OK) {
+        if (filestore->commit_tmp(filestore->user,
+                                  entity->receiver.destination_path) != 0) {
+            status = CCSDS_CFDP_STATUS_FILESTORE_REJECTION;
+        }
+    } else {
+        (void)filestore->discard_tmp(filestore->user,
+                                     entity->receiver.destination_path);
+    }
+
+    ccsds_cfdp_entity_release_receiver_transaction(entity);
+    return status;
+}
+
+static enum ccsds_cfdp_status receiver_handle_metadata(
+    ccsds_cfdp_entity_t *entity, const ccsds_cfdp_filestore_ops_t *filestore,
+    const uint8_t *pdu, size_t pdu_len)
+{
+    ccsds_cfdp_metadata_pdu_t metadata;
+    ccsds_cfdp_transaction_id_t incoming;
+    size_t consumed;
+    enum ccsds_cfdp_status status;
+
+    status = ccsds_cfdp_decode_metadata(pdu, pdu_len, &metadata, &consumed);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+    if (consumed != pdu_len ||
+        !incoming_header_is_supported(entity, &metadata.header)) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    incoming = transaction_id_from_header(&metadata.header);
+    if (entity->receiver.active) {
+        if (!transaction_id_matches(&entity->receiver.id, &incoming)) {
+            return CCSDS_CFDP_STATUS_TRANSACTION_BUSY;
+        }
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    status = ccsds_cfdp_checksum_init(&entity->receiver.checksum_state,
+                                      metadata.checksum_type);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    status = ccsds_cfdp_ranges_init(&entity->receiver.received_ranges);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    memset(entity->receiver.destination_path, 0,
+           sizeof(entity->receiver.destination_path));
+    memcpy(entity->receiver.destination_path,
+           metadata.destination_filename.value, metadata.destination_filename.len);
+
+    if (filestore->open_write_tmp(filestore->user,
+                                  entity->receiver.destination_path,
+                                  &entity->receiver.file_handle) != 0) {
+        memset(&entity->receiver, 0, sizeof(entity->receiver));
+        return CCSDS_CFDP_STATUS_FILESTORE_REJECTION;
+    }
+
+    entity->receiver.active = true;
+    entity->receiver.metadata_received = true;
+    entity->receiver.file_handle_open = true;
+    entity->receiver.id = incoming;
+    entity->receiver.peer_entity_id = metadata.header.source_entity_id;
+    entity->receiver.file_size = metadata.file_size;
+    entity->receiver.checksum_type = metadata.checksum_type;
+
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+static enum ccsds_cfdp_status receiver_handle_filedata(
+    ccsds_cfdp_entity_t *entity, const ccsds_cfdp_filestore_ops_t *filestore,
+    const uint8_t *pdu, size_t pdu_len)
+{
+    ccsds_cfdp_filedata_pdu_t filedata;
+    uint32_t end;
+    size_t consumed;
+    enum ccsds_cfdp_status status;
+
+    status = ccsds_cfdp_decode_filedata(pdu, pdu_len, &filedata, &consumed);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+    if (consumed != pdu_len ||
+        !incoming_header_is_supported(entity, &filedata.header)) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    status = receiver_match_active(entity, &filedata.header);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if (filedata.data_len > UINT32_MAX ||
+        filedata.offset > UINT32_MAX - (uint32_t)filedata.data_len) {
+        return CCSDS_CFDP_STATUS_FILE_SIZE_ERROR;
+    }
+    end = filedata.offset + (uint32_t)filedata.data_len;
+    if (end > entity->receiver.file_size) {
+        return CCSDS_CFDP_STATUS_FILE_SIZE_ERROR;
+    }
+
+    if (filestore->write(filestore->user, entity->receiver.file_handle,
+                         filedata.offset, filedata.data,
+                         filedata.data_len) != 0) {
+        return CCSDS_CFDP_STATUS_FILESTORE_REJECTION;
+    }
+
+    status = ccsds_cfdp_ranges_add(&entity->receiver.received_ranges,
+                                   filedata.offset, end);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    return ccsds_cfdp_checksum_update(&entity->receiver.checksum_state,
+                                      filedata.offset, filedata.data,
+                                      filedata.data_len);
+}
+
+static enum ccsds_cfdp_status receiver_handle_eof(
+    ccsds_cfdp_entity_t *entity, const ccsds_cfdp_filestore_ops_t *filestore,
+    const uint8_t *pdu, size_t pdu_len)
+{
+    ccsds_cfdp_eof_pdu_t eof;
+    size_t consumed;
+    enum ccsds_cfdp_status status;
+    bool complete = false;
+    uint32_t checksum = 0u;
+
+    status = ccsds_cfdp_decode_eof(pdu, pdu_len, &eof, &consumed);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+    if (consumed != pdu_len ||
+        !incoming_header_is_supported(entity, &eof.header)) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    status = receiver_match_active(entity, &eof.header);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if (eof.condition_code != CCSDS_CFDP_CONDITION_NO_ERROR ||
+        eof.file_size != entity->receiver.file_size) {
+        return receiver_finish(entity, filestore,
+                               CCSDS_CFDP_STATUS_FILE_SIZE_ERROR);
+    }
+
+    status = ccsds_cfdp_ranges_is_complete(&entity->receiver.received_ranges,
+                                           0u, eof.file_size, &complete);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return receiver_finish(entity, filestore, status);
+    }
+    if (!complete) {
+        return receiver_finish(entity, filestore,
+                               CCSDS_CFDP_STATUS_FILE_SIZE_ERROR);
+    }
+
+    status = receiver_compute_checksum(entity, filestore, &checksum);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return receiver_finish(entity, filestore, status);
+    }
+    if (checksum != eof.file_checksum) {
+        return receiver_finish(entity, filestore,
+                               CCSDS_CFDP_STATUS_CHECKSUM_FAILURE);
+    }
+
+    return receiver_finish(entity, filestore, CCSDS_CFDP_STATUS_OK);
+}
+
 enum ccsds_cfdp_status
 ccsds_cfdp_entity_init(ccsds_cfdp_entity_t *entity,
                        const ccsds_cfdp_entity_config_t *config,
@@ -356,6 +657,51 @@ out_release:
     }
     ccsds_cfdp_entity_release_sender_transaction(entity);
     return status;
+}
+
+enum ccsds_cfdp_status
+ccsds_cfdp_entity_receive_pdu(ccsds_cfdp_entity_t *entity,
+                              const ccsds_cfdp_filestore_ops_t *filestore,
+                              const uint8_t *pdu, size_t pdu_len)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    enum ccsds_cfdp_status status;
+    uint8_t directive;
+
+    __ASSERT(entity != NULL, "CFDP entity is NULL");
+    __ASSERT(filestore != NULL, "CFDP filestore ops are NULL");
+    __ASSERT(pdu != NULL, "CFDP incoming PDU is NULL");
+
+    if (!receive_filestore_is_valid(filestore)) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    status = ccsds_cfdp_decode_header(pdu, pdu_len, &header, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+    if (!incoming_header_is_supported(entity, &header)) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    if (header.pdu_type == CCSDS_CFDP_PDU_TYPE_FILE_DATA) {
+        return receiver_handle_filedata(entity, filestore, pdu, pdu_len);
+    }
+
+    if (header.pdu_data_field_len == 0u || pdu_len <= header_len) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    directive = pdu[header_len];
+    switch (directive) {
+    case CCSDS_CFDP_DIRECTIVE_METADATA:
+        return receiver_handle_metadata(entity, filestore, pdu, pdu_len);
+    case CCSDS_CFDP_DIRECTIVE_EOF:
+        return receiver_handle_eof(entity, filestore, pdu, pdu_len);
+    default:
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
 }
 
 enum ccsds_cfdp_status

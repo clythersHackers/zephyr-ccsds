@@ -13,6 +13,7 @@
 #include "ccsds_cfdp_checksum.h"
 #include "ccsds_cfdp_filestore.h"
 #include "ccsds_cfdp_pdu.h"
+#include "ccsds_cfdp_ranges.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -53,6 +54,14 @@ struct ccsds_cfdp_transaction_slot {
     bool active;
     ccsds_cfdp_transaction_id_t id;
     uint64_t peer_entity_id;
+    bool metadata_received;
+    bool file_handle_open;
+    void *file_handle;
+    uint32_t file_size;
+    enum ccsds_cfdp_checksum_type checksum_type;
+    ccsds_cfdp_checksum_state_t checksum_state;
+    ccsds_cfdp_ranges_t received_ranges;
+    char destination_path[CCSDS_CFDP_MAX_FILENAME_LEN + 1u];
 };
 
 typedef struct ccsds_cfdp_transaction_slot ccsds_cfdp_transaction_slot_t;
@@ -95,6 +104,11 @@ ccsds_cfdp_entity_send_file(ccsds_cfdp_entity_t *entity,
                             const ccsds_cfdp_filestore_ops_t *filestore,
                             const ccsds_cfdp_put_request_t *request,
                             ccsds_cfdp_transaction_id_t *transaction_id);
+
+enum ccsds_cfdp_status
+ccsds_cfdp_entity_receive_pdu(ccsds_cfdp_entity_t *entity,
+                              const ccsds_cfdp_filestore_ops_t *filestore,
+                              const uint8_t *pdu, size_t pdu_len);
 
 enum ccsds_cfdp_status
 ccsds_cfdp_entity_match_or_create_receiver_transaction(
