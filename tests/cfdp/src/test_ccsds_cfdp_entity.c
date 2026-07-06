@@ -39,6 +39,28 @@ struct receive_filestore {
     uint32_t discard_count;
 };
 
+struct closure_loopback_endpoint;
+
+struct closure_loopback {
+    ccsds_cfdp_entity_t *sender;
+    ccsds_cfdp_entity_t *receiver;
+    ccsds_cfdp_filestore_ops_t *dest_ops;
+    struct closure_loopback_endpoint *sender_endpoint;
+    struct closure_loopback_endpoint *receiver_endpoint;
+    bool drop_filedata_enabled;
+    uint32_t drop_filedata_offset;
+    uint32_t sender_to_receiver_count;
+    uint32_t receiver_to_sender_count;
+    uint32_t dropped_count;
+    enum ccsds_cfdp_status last_receiver_status;
+    enum ccsds_cfdp_status last_sender_status;
+};
+
+struct closure_loopback_endpoint {
+    struct closure_loopback *loopback;
+    uint64_t local_entity_id;
+};
+
 static int test_send_pdu(void *user, uint64_t dest_entity_id,
                          const uint8_t *pdu, size_t pdu_len)
 {
@@ -54,6 +76,60 @@ static int test_send_pdu(void *user, uint64_t dest_entity_id,
     }
 
     return 0;
+}
+
+static uint64_t test_now_ms(void *user)
+{
+    ARG_UNUSED(user);
+
+    return 1000u;
+}
+
+static int closure_loopback_send_pdu(void *user, uint64_t dest_entity_id,
+                                     const uint8_t *pdu, size_t pdu_len)
+{
+    struct closure_loopback_endpoint *endpoint = user;
+    struct closure_loopback *loopback;
+    ccsds_cfdp_pdu_header_t header;
+    size_t consumed;
+
+    zassert_not_null(endpoint);
+    zassert_not_null(endpoint->loopback);
+    zassert_not_null(pdu);
+
+    loopback = endpoint->loopback;
+    zassert_equal(ccsds_cfdp_decode_header(pdu, pdu_len, &header, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+
+    if (dest_entity_id == loopback->receiver_endpoint->local_entity_id) {
+        loopback->sender_to_receiver_count++;
+        if (loopback->drop_filedata_enabled &&
+            header.pdu_type == CCSDS_CFDP_PDU_TYPE_FILE_DATA) {
+            ccsds_cfdp_filedata_pdu_t filedata;
+
+            zassert_equal(ccsds_cfdp_decode_filedata(pdu, pdu_len, &filedata,
+                                                     &consumed),
+                          CCSDS_CFDP_STATUS_OK);
+            if (filedata.offset == loopback->drop_filedata_offset) {
+                loopback->dropped_count++;
+                return 0;
+            }
+        }
+
+        loopback->last_receiver_status = ccsds_cfdp_entity_receive_pdu(
+            loopback->receiver, loopback->dest_ops, pdu, pdu_len);
+        return 0;
+    }
+
+    if (dest_entity_id == loopback->sender_endpoint->local_entity_id) {
+        loopback->receiver_to_sender_count++;
+        loopback->last_sender_status =
+            ccsds_cfdp_entity_receive_pdu(loopback->sender, NULL, pdu,
+                                          pdu_len);
+        return 0;
+    }
+
+    return -1;
 }
 
 static int memory_open_read(void *user, const char *path, void **handle,
@@ -249,6 +325,24 @@ static ccsds_cfdp_ut_ops_t capture_ut(struct send_capture *capture)
     };
 }
 
+static ccsds_cfdp_ut_ops_t capture_ut_with_clock(struct send_capture *capture)
+{
+    return (ccsds_cfdp_ut_ops_t){
+        .user = capture,
+        .send_pdu = test_send_pdu,
+        .now_ms = test_now_ms,
+    };
+}
+
+static ccsds_cfdp_ut_ops_t closure_ut(struct closure_loopback_endpoint *endpoint)
+{
+    return (ccsds_cfdp_ut_ops_t){
+        .user = endpoint,
+        .send_pdu = closure_loopback_send_pdu,
+        .now_ms = NULL,
+    };
+}
+
 static ccsds_cfdp_filestore_ops_t memory_filestore_ops(
     struct memory_filestore *store)
 {
@@ -301,6 +395,18 @@ static void init_entity_with_capture(ccsds_cfdp_entity_t *entity,
                   CCSDS_CFDP_STATUS_OK);
 }
 
+static void init_entity_with_capture_and_clock(ccsds_cfdp_entity_t *entity,
+                                               struct send_capture *capture)
+{
+    const ccsds_cfdp_entity_config_t config = base_config();
+    const ccsds_cfdp_ut_ops_t ut = capture_ut_with_clock(capture);
+
+    memset(entity, 0xa5, sizeof(*entity));
+    memset(capture, 0, sizeof(*capture));
+    zassert_equal(ccsds_cfdp_entity_init(entity, &config, &ut),
+                  CCSDS_CFDP_STATUS_OK);
+}
+
 static void init_entity_with_config(ccsds_cfdp_entity_t *entity,
                                     uint64_t local_entity_id,
                                     uint64_t remote_entity_id)
@@ -313,6 +419,21 @@ static void init_entity_with_config(ccsds_cfdp_entity_t *entity,
 
     memset(entity, 0xa5, sizeof(*entity));
     zassert_equal(ccsds_cfdp_entity_init(entity, &config, &ut),
+                  CCSDS_CFDP_STATUS_OK);
+}
+
+static void init_entity_with_custom_ut(ccsds_cfdp_entity_t *entity,
+                                       uint64_t local_entity_id,
+                                       uint64_t remote_entity_id,
+                                       const ccsds_cfdp_ut_ops_t *ut)
+{
+    ccsds_cfdp_entity_config_t config = base_config();
+
+    config.local_entity_id = local_entity_id;
+    config.remote_entity_id = remote_entity_id;
+
+    memset(entity, 0xa5, sizeof(*entity));
+    zassert_equal(ccsds_cfdp_entity_init(entity, &config, ut),
                   CCSDS_CFDP_STATUS_OK);
 }
 
@@ -722,6 +843,30 @@ ZTEST(ccsds_cfdp_entity, test_send_file_rejects_second_simultaneous_sender)
     zassert_equal(store.read_count, 0u);
 }
 
+ZTEST(ccsds_cfdp_entity, test_send_file_reports_timeout_without_finished)
+{
+    ccsds_cfdp_entity_t entity;
+    struct send_capture capture;
+    const uint8_t file[] = { 0x42u };
+    struct memory_filestore store = {
+        .data = file,
+        .size = sizeof(file),
+    };
+    ccsds_cfdp_filestore_ops_t filestore = memory_filestore_ops(&store);
+    const ccsds_cfdp_put_request_t request = base_put_request();
+    ccsds_cfdp_transaction_id_t id;
+
+    init_entity_with_capture_and_clock(&entity, &capture);
+
+    zassert_equal(ccsds_cfdp_entity_send_file(&entity, &filestore, &request,
+                                              &id),
+                  CCSDS_CFDP_STATUS_INACTIVITY_DETECTED);
+
+    zassert_false(entity.sender.active);
+    zassert_equal(capture.count, 3u);
+    zassert_equal(store.close_count, 1u);
+}
+
 ZTEST(ccsds_cfdp_entity, test_incoming_pdu_creates_and_matches_receiver)
 {
     ccsds_cfdp_entity_t entity;
@@ -836,6 +981,121 @@ ZTEST(ccsds_cfdp_entity, test_receive_loopback_commits_destination_file)
     zassert_mem_equal(dest_store.dst.data, file, sizeof(file));
     zassert_equal(dest_store.commit_count, 1u);
     zassert_equal(dest_store.discard_count, 0u);
+}
+
+ZTEST(ccsds_cfdp_entity, test_class1_closure_loopback_reports_sender_success)
+{
+    ccsds_cfdp_entity_t sender;
+    ccsds_cfdp_entity_t receiver;
+    struct closure_loopback loopback;
+    struct closure_loopback_endpoint sender_endpoint;
+    struct closure_loopback_endpoint receiver_endpoint;
+    const uint8_t file[] = { 'C', 'F', 'D', 'P' };
+    struct memory_filestore source_store = {
+        .data = file,
+        .size = sizeof(file),
+    };
+    struct receive_filestore dest_store;
+    ccsds_cfdp_filestore_ops_t source_ops =
+        memory_filestore_ops(&source_store);
+    ccsds_cfdp_filestore_ops_t dest_ops = receive_filestore_ops(&dest_store);
+    ccsds_cfdp_ut_ops_t sender_ut;
+    ccsds_cfdp_ut_ops_t receiver_ut;
+    const ccsds_cfdp_put_request_t request = base_put_request();
+    ccsds_cfdp_transaction_id_t id;
+
+    memset(&loopback, 0, sizeof(loopback));
+    memset(&sender_endpoint, 0, sizeof(sender_endpoint));
+    memset(&receiver_endpoint, 0, sizeof(receiver_endpoint));
+    memset(&dest_store, 0, sizeof(dest_store));
+
+    loopback.sender = &sender;
+    loopback.receiver = &receiver;
+    loopback.dest_ops = &dest_ops;
+    loopback.sender_endpoint = &sender_endpoint;
+    loopback.receiver_endpoint = &receiver_endpoint;
+    sender_endpoint.loopback = &loopback;
+    sender_endpoint.local_entity_id = 0x12u;
+    receiver_endpoint.loopback = &loopback;
+    receiver_endpoint.local_entity_id = 0x34u;
+    sender_ut = closure_ut(&sender_endpoint);
+    receiver_ut = closure_ut(&receiver_endpoint);
+
+    init_entity_with_custom_ut(&sender, 0x12u, 0x34u, &sender_ut);
+    init_entity_with_custom_ut(&receiver, 0x34u, 0x12u, &receiver_ut);
+
+    zassert_equal(ccsds_cfdp_entity_send_file(&sender, &source_ops, &request,
+                                              &id),
+                  CCSDS_CFDP_STATUS_OK);
+
+    zassert_false(sender.sender.active);
+    zassert_false(receiver.receiver.active);
+    zassert_true(dest_store.dst.exists);
+    zassert_equal(dest_store.dst.size, sizeof(file));
+    zassert_mem_equal(dest_store.dst.data, file, sizeof(file));
+    zassert_equal(loopback.sender_to_receiver_count, 3u);
+    zassert_equal(loopback.receiver_to_sender_count, 1u);
+    zassert_equal(loopback.last_receiver_status, CCSDS_CFDP_STATUS_OK);
+    zassert_equal(loopback.last_sender_status, CCSDS_CFDP_STATUS_OK);
+}
+
+ZTEST(ccsds_cfdp_entity, test_class1_closure_loopback_reports_sender_failure)
+{
+    ccsds_cfdp_entity_t sender;
+    ccsds_cfdp_entity_t receiver;
+    struct closure_loopback loopback;
+    struct closure_loopback_endpoint sender_endpoint;
+    struct closure_loopback_endpoint receiver_endpoint;
+    const uint8_t file[] = { 'l', 'o', 's', 's' };
+    struct memory_filestore source_store = {
+        .data = file,
+        .size = sizeof(file),
+    };
+    struct receive_filestore dest_store;
+    ccsds_cfdp_filestore_ops_t source_ops =
+        memory_filestore_ops(&source_store);
+    ccsds_cfdp_filestore_ops_t dest_ops = receive_filestore_ops(&dest_store);
+    ccsds_cfdp_ut_ops_t sender_ut;
+    ccsds_cfdp_ut_ops_t receiver_ut;
+    const ccsds_cfdp_put_request_t request = base_put_request();
+    ccsds_cfdp_transaction_id_t id;
+
+    memset(&loopback, 0, sizeof(loopback));
+    memset(&sender_endpoint, 0, sizeof(sender_endpoint));
+    memset(&receiver_endpoint, 0, sizeof(receiver_endpoint));
+    memset(&dest_store, 0, sizeof(dest_store));
+
+    loopback.sender = &sender;
+    loopback.receiver = &receiver;
+    loopback.dest_ops = &dest_ops;
+    loopback.sender_endpoint = &sender_endpoint;
+    loopback.receiver_endpoint = &receiver_endpoint;
+    loopback.drop_filedata_enabled = true;
+    loopback.drop_filedata_offset = 0u;
+    sender_endpoint.loopback = &loopback;
+    sender_endpoint.local_entity_id = 0x12u;
+    receiver_endpoint.loopback = &loopback;
+    receiver_endpoint.local_entity_id = 0x34u;
+    sender_ut = closure_ut(&sender_endpoint);
+    receiver_ut = closure_ut(&receiver_endpoint);
+
+    init_entity_with_custom_ut(&sender, 0x12u, 0x34u, &sender_ut);
+    init_entity_with_custom_ut(&receiver, 0x34u, 0x12u, &receiver_ut);
+
+    zassert_equal(ccsds_cfdp_entity_send_file(&sender, &source_ops, &request,
+                                              &id),
+                  CCSDS_CFDP_STATUS_FILE_SIZE_ERROR);
+
+    zassert_false(sender.sender.active);
+    zassert_false(receiver.receiver.active);
+    zassert_false(dest_store.dst.exists);
+    zassert_equal(dest_store.discard_count, 1u);
+    zassert_equal(loopback.dropped_count, 1u);
+    zassert_equal(loopback.receiver_to_sender_count, 1u);
+    zassert_equal(loopback.last_receiver_status,
+                  CCSDS_CFDP_STATUS_FILE_SIZE_ERROR);
+    zassert_equal(loopback.last_sender_status,
+                  CCSDS_CFDP_STATUS_FILE_SIZE_ERROR);
 }
 
 ZTEST(ccsds_cfdp_entity, test_receive_out_of_order_filedata_commits_file)

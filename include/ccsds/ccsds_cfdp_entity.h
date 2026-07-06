@@ -62,6 +62,9 @@ struct ccsds_cfdp_transaction_slot {
     ccsds_cfdp_checksum_state_t checksum_state;
     ccsds_cfdp_ranges_t received_ranges;
     char destination_path[CCSDS_CFDP_MAX_FILENAME_LEN + 1u];
+    bool closure_requested;
+    bool finished_received;
+    enum ccsds_cfdp_status finished_status;
 };
 
 typedef struct ccsds_cfdp_transaction_slot ccsds_cfdp_transaction_slot_t;
