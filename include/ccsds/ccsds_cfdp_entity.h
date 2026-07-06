@@ -10,6 +10,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ccsds_cfdp_checksum.h"
+#include "ccsds_cfdp_filestore.h"
 #include "ccsds_cfdp_pdu.h"
 
 #ifdef __cplusplus
@@ -55,6 +57,15 @@ struct ccsds_cfdp_transaction_slot {
 
 typedef struct ccsds_cfdp_transaction_slot ccsds_cfdp_transaction_slot_t;
 
+struct ccsds_cfdp_put_request {
+    const char *source_path;
+    const char *destination_path;
+    enum ccsds_cfdp_checksum_type checksum_type;
+    bool closure_requested;
+};
+
+typedef struct ccsds_cfdp_put_request ccsds_cfdp_put_request_t;
+
 struct ccsds_cfdp_entity {
     uint64_t local_entity_id;
     uint64_t remote_entity_id;
@@ -64,6 +75,8 @@ struct ccsds_cfdp_entity {
     ccsds_cfdp_ut_ops_t ut;
     ccsds_cfdp_transaction_slot_t sender;
     ccsds_cfdp_transaction_slot_t receiver;
+    uint8_t pdu_buf[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t file_segment_buf[CCSDS_CFDP_MAX_SEGMENT_SIZE];
 };
 
 typedef struct ccsds_cfdp_entity ccsds_cfdp_entity_t;
@@ -76,6 +89,12 @@ ccsds_cfdp_entity_init(ccsds_cfdp_entity_t *entity,
 enum ccsds_cfdp_status
 ccsds_cfdp_entity_create_sender_transaction(
     ccsds_cfdp_entity_t *entity, ccsds_cfdp_transaction_id_t *transaction_id);
+
+enum ccsds_cfdp_status
+ccsds_cfdp_entity_send_file(ccsds_cfdp_entity_t *entity,
+                            const ccsds_cfdp_filestore_ops_t *filestore,
+                            const ccsds_cfdp_put_request_t *request,
+                            ccsds_cfdp_transaction_id_t *transaction_id);
 
 enum ccsds_cfdp_status
 ccsds_cfdp_entity_match_or_create_receiver_transaction(
