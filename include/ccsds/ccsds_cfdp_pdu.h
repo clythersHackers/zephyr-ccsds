@@ -88,6 +88,33 @@ struct ccsds_cfdp_finished_pdu {
 
 typedef struct ccsds_cfdp_finished_pdu ccsds_cfdp_finished_pdu_t;
 
+struct ccsds_cfdp_ack_pdu {
+    ccsds_cfdp_pdu_header_t header;
+    enum ccsds_cfdp_directive_code acknowledged_directive;
+    enum ccsds_cfdp_ack_directive_subtype directive_subtype;
+    enum ccsds_cfdp_condition_code condition_code;
+    enum ccsds_cfdp_transaction_status transaction_status;
+};
+
+typedef struct ccsds_cfdp_ack_pdu ccsds_cfdp_ack_pdu_t;
+
+struct ccsds_cfdp_nak_range {
+    uint32_t start;
+    uint32_t end;
+};
+
+typedef struct ccsds_cfdp_nak_range ccsds_cfdp_nak_range_t;
+
+struct ccsds_cfdp_nak_pdu {
+    ccsds_cfdp_pdu_header_t header;
+    uint32_t scope_start;
+    uint32_t scope_end;
+    ccsds_cfdp_nak_range_t ranges[CCSDS_CFDP_MAX_NAK_RANGES];
+    size_t range_count;
+};
+
+typedef struct ccsds_cfdp_nak_pdu ccsds_cfdp_nak_pdu_t;
+
 /**
  * @brief Return the encoded fixed-header length for the selected ID lengths.
  *
@@ -319,6 +346,62 @@ enum ccsds_cfdp_status
 ccsds_cfdp_decode_finished(const uint8_t *buf, size_t len,
                            ccsds_cfdp_finished_pdu_t *finished,
                            size_t *consumed);
+
+/**
+ * @brief Encode a complete CFDP ACK PDU for EOF or Finished.
+ *
+ * @param ack ACK PDU fields to encode.
+ * @param buf Output buffer.
+ * @param cap Output buffer capacity in octets.
+ * @param len Written encoded length in octets.
+ *
+ * @return CFDP status code.
+ */
+enum ccsds_cfdp_status ccsds_cfdp_encode_ack(const ccsds_cfdp_ack_pdu_t *ack,
+                                             uint8_t *buf, size_t cap,
+                                             size_t *len);
+
+/**
+ * @brief Decode a complete CFDP ACK PDU for EOF or Finished.
+ *
+ * @param buf Encoded CFDP ACK PDU bytes.
+ * @param len Input length in octets.
+ * @param ack Output decoded ACK PDU.
+ * @param consumed Number of PDU octets consumed.
+ *
+ * @return CFDP status code.
+ */
+enum ccsds_cfdp_status ccsds_cfdp_decode_ack(const uint8_t *buf, size_t len,
+                                             ccsds_cfdp_ack_pdu_t *ack,
+                                             size_t *consumed);
+
+/**
+ * @brief Encode a complete CFDP NAK PDU with normal 32-bit offsets.
+ *
+ * @param nak NAK PDU fields to encode.
+ * @param buf Output buffer.
+ * @param cap Output buffer capacity in octets.
+ * @param len Written encoded length in octets.
+ *
+ * @return CFDP status code.
+ */
+enum ccsds_cfdp_status ccsds_cfdp_encode_nak(const ccsds_cfdp_nak_pdu_t *nak,
+                                             uint8_t *buf, size_t cap,
+                                             size_t *len);
+
+/**
+ * @brief Decode a complete CFDP NAK PDU with normal 32-bit offsets.
+ *
+ * @param buf Encoded CFDP NAK PDU bytes.
+ * @param len Input length in octets.
+ * @param nak Output decoded NAK PDU.
+ * @param consumed Number of PDU octets consumed.
+ *
+ * @return CFDP status code.
+ */
+enum ccsds_cfdp_status ccsds_cfdp_decode_nak(const uint8_t *buf, size_t len,
+                                             ccsds_cfdp_nak_pdu_t *nak,
+                                             size_t *consumed);
 
 #ifdef __cplusplus
 }

@@ -10,6 +10,9 @@
 #define CCSDS_CFDP_FILEDATA_OFFSET_LEN 4u
 #define CCSDS_CFDP_EOF_DATA_LEN 10u
 #define CCSDS_CFDP_FINISHED_DATA_LEN 2u
+#define CCSDS_CFDP_ACK_DATA_LEN 3u
+#define CCSDS_CFDP_NAK_MIN_DATA_LEN 9u
+#define CCSDS_CFDP_NAK_RANGE_LEN 8u
 #define CCSDS_CFDP_METADATA_MIN_DATA_LEN 8u
 #define CCSDS_CFDP_METADATA_CLOSURE_REQUESTED 0x40u
 #define CCSDS_CFDP_METADATA_RESERVED_MASK 0xb0u
@@ -19,6 +22,11 @@
 #define CCSDS_CFDP_FINISHED_SPARE_MASK 0x08u
 #define CCSDS_CFDP_FINISHED_DELIVERY_MASK 0x04u
 #define CCSDS_CFDP_FINISHED_FILE_STATUS_MASK 0x03u
+#define CCSDS_CFDP_ACK_DIRECTIVE_MASK 0xf0u
+#define CCSDS_CFDP_ACK_SUBTYPE_MASK 0x0fu
+#define CCSDS_CFDP_ACK_CONDITION_MASK 0xf0u
+#define CCSDS_CFDP_ACK_SPARE_MASK 0x0cu
+#define CCSDS_CFDP_ACK_TRANSACTION_STATUS_MASK 0x03u
 
 static bool encoded_int_len_is_valid(uint8_t len, uint8_t max_len)
 {
@@ -78,6 +86,22 @@ static bool condition_code_is_valid(enum ccsds_cfdp_condition_code code)
 {
     return code >= CCSDS_CFDP_CONDITION_NO_ERROR &&
            code <= CCSDS_CFDP_CONDITION_CANCEL_REQUEST_RECEIVED;
+}
+
+static bool ack_directive_is_supported(enum ccsds_cfdp_directive_code directive)
+{
+    return directive == CCSDS_CFDP_DIRECTIVE_EOF ||
+           directive == CCSDS_CFDP_DIRECTIVE_FINISHED;
+}
+
+static bool ack_subtype_is_valid(enum ccsds_cfdp_directive_code directive,
+                                 enum ccsds_cfdp_ack_directive_subtype subtype)
+{
+    if (directive == CCSDS_CFDP_DIRECTIVE_FINISHED) {
+        return subtype == CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_FINISHED;
+    }
+
+    return subtype == CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_OTHER;
 }
 
 size_t ccsds_cfdp_header_encoded_len(const ccsds_cfdp_pdu_header_t *header)
@@ -864,5 +888,288 @@ enum ccsds_cfdp_status ccsds_cfdp_tlv_write(uint8_t type,
     }
 
     *written = needed;
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+enum ccsds_cfdp_status ccsds_cfdp_encode_ack(const ccsds_cfdp_ack_pdu_t *ack,
+                                             uint8_t *buf, size_t cap,
+                                             size_t *len)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    size_t offset;
+    enum ccsds_cfdp_status status;
+
+    __ASSERT(ack != NULL, "CFDP ACK PDU is NULL");
+    __ASSERT(buf != NULL, "CFDP ACK output buffer is NULL");
+    __ASSERT(len != NULL, "CFDP ACK length output is NULL");
+
+    if (ack->header.pdu_type != CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE ||
+        ack->header.segment_metadata_present ||
+        !ack_directive_is_supported(ack->acknowledged_directive) ||
+        !ack_subtype_is_valid(ack->acknowledged_directive,
+                              ack->directive_subtype) ||
+        !condition_code_is_valid(ack->condition_code) ||
+        ack->transaction_status >
+            CCSDS_CFDP_TRANSACTION_STATUS_UNRECOGNIZED) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    if (ack->header.file_size_mode != CCSDS_CFDP_FILE_SIZE_SMALL) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    header = ack->header;
+    header.pdu_data_field_len = CCSDS_CFDP_ACK_DATA_LEN;
+
+    status = ccsds_cfdp_encode_header(&header, buf, cap, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if ((cap - header_len) < CCSDS_CFDP_ACK_DATA_LEN) {
+        return CCSDS_CFDP_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    offset = header_len;
+    buf[offset++] = CCSDS_CFDP_DIRECTIVE_ACK;
+    buf[offset++] = (uint8_t)((ack->acknowledged_directive & 0x0fu) << 4) |
+                    (uint8_t)(ack->directive_subtype & 0x0fu);
+    buf[offset++] = (uint8_t)((ack->condition_code & 0x0fu) << 4) |
+                    (uint8_t)(ack->transaction_status &
+                              CCSDS_CFDP_ACK_TRANSACTION_STATUS_MASK);
+
+    *len = offset;
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+enum ccsds_cfdp_status ccsds_cfdp_decode_ack(const uint8_t *buf, size_t len,
+                                             ccsds_cfdp_ack_pdu_t *ack,
+                                             size_t *consumed)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    size_t pdu_end;
+    size_t offset;
+    enum ccsds_cfdp_status status;
+    uint8_t directive_byte;
+    uint8_t status_byte;
+    enum ccsds_cfdp_directive_code acknowledged_directive;
+    enum ccsds_cfdp_ack_directive_subtype subtype;
+    enum ccsds_cfdp_condition_code condition_code;
+
+    __ASSERT(buf != NULL, "CFDP ACK input buffer is NULL");
+    __ASSERT(ack != NULL, "CFDP ACK output is NULL");
+    __ASSERT(consumed != NULL, "CFDP ACK consumed length output is NULL");
+
+    status = ccsds_cfdp_decode_header(buf, len, &header, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if (header.pdu_type != CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE ||
+        header.segment_metadata_present) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    if (header.file_size_mode != CCSDS_CFDP_FILE_SIZE_SMALL) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    if (header.pdu_data_field_len != CCSDS_CFDP_ACK_DATA_LEN ||
+        (len - header_len) < header.pdu_data_field_len) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    pdu_end = header_len + header.pdu_data_field_len;
+    offset = header_len;
+
+    if (buf[offset++] != CCSDS_CFDP_DIRECTIVE_ACK) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    directive_byte = buf[offset++];
+    acknowledged_directive =
+        (enum ccsds_cfdp_directive_code)((directive_byte &
+                                          CCSDS_CFDP_ACK_DIRECTIVE_MASK) >>
+                                         4);
+    subtype = (enum ccsds_cfdp_ack_directive_subtype)(
+        directive_byte & CCSDS_CFDP_ACK_SUBTYPE_MASK);
+    if (!ack_directive_is_supported(acknowledged_directive) ||
+        !ack_subtype_is_valid(acknowledged_directive, subtype)) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    status_byte = buf[offset++];
+    if ((status_byte & CCSDS_CFDP_ACK_SPARE_MASK) != 0u) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    condition_code =
+        (enum ccsds_cfdp_condition_code)((status_byte &
+                                          CCSDS_CFDP_ACK_CONDITION_MASK) >>
+                                         4);
+    if (!condition_code_is_valid(condition_code)) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    ack->header = header;
+    ack->acknowledged_directive = acknowledged_directive;
+    ack->directive_subtype = subtype;
+    ack->condition_code = condition_code;
+    ack->transaction_status = (enum ccsds_cfdp_transaction_status)(
+        status_byte & CCSDS_CFDP_ACK_TRANSACTION_STATUS_MASK);
+    *consumed = pdu_end;
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+static enum ccsds_cfdp_status
+nak_validate_ranges(const ccsds_cfdp_nak_pdu_t *nak)
+{
+    if (nak->scope_start >= nak->scope_end ||
+        nak->range_count > CCSDS_CFDP_MAX_NAK_RANGES) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    for (size_t i = 0u; i < nak->range_count; i++) {
+        if (nak->ranges[i].start >= nak->ranges[i].end ||
+            nak->ranges[i].start < nak->scope_start ||
+            nak->ranges[i].end > nak->scope_end) {
+            return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+        }
+    }
+
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+enum ccsds_cfdp_status ccsds_cfdp_encode_nak(const ccsds_cfdp_nak_pdu_t *nak,
+                                             uint8_t *buf, size_t cap,
+                                             size_t *len)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    size_t pdu_data_len;
+    size_t offset;
+    enum ccsds_cfdp_status status;
+
+    __ASSERT(nak != NULL, "CFDP NAK PDU is NULL");
+    __ASSERT(buf != NULL, "CFDP NAK output buffer is NULL");
+    __ASSERT(len != NULL, "CFDP NAK length output is NULL");
+
+    if (nak->header.pdu_type != CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE ||
+        nak->header.segment_metadata_present) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    if (nak->header.file_size_mode != CCSDS_CFDP_FILE_SIZE_SMALL) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    status = nak_validate_ranges(nak);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    pdu_data_len = CCSDS_CFDP_NAK_MIN_DATA_LEN +
+                   (nak->range_count * CCSDS_CFDP_NAK_RANGE_LEN);
+    if (pdu_data_len > UINT16_MAX) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    header = nak->header;
+    header.pdu_data_field_len = (uint16_t)pdu_data_len;
+
+    status = ccsds_cfdp_encode_header(&header, buf, cap, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if ((cap - header_len) < pdu_data_len) {
+        return CCSDS_CFDP_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    offset = header_len;
+    buf[offset++] = CCSDS_CFDP_DIRECTIVE_NAK;
+    sys_put_be32(nak->scope_start, &buf[offset]);
+    offset += 4u;
+    sys_put_be32(nak->scope_end, &buf[offset]);
+    offset += 4u;
+    for (size_t i = 0u; i < nak->range_count; i++) {
+        sys_put_be32(nak->ranges[i].start, &buf[offset]);
+        offset += 4u;
+        sys_put_be32(nak->ranges[i].end, &buf[offset]);
+        offset += 4u;
+    }
+
+    *len = offset;
+    return CCSDS_CFDP_STATUS_OK;
+}
+
+enum ccsds_cfdp_status ccsds_cfdp_decode_nak(const uint8_t *buf, size_t len,
+                                             ccsds_cfdp_nak_pdu_t *nak,
+                                             size_t *consumed)
+{
+    ccsds_cfdp_pdu_header_t header;
+    size_t header_len;
+    size_t pdu_end;
+    size_t offset;
+    size_t remaining;
+    enum ccsds_cfdp_status status;
+
+    __ASSERT(buf != NULL, "CFDP NAK input buffer is NULL");
+    __ASSERT(nak != NULL, "CFDP NAK output is NULL");
+    __ASSERT(consumed != NULL, "CFDP NAK consumed length output is NULL");
+
+    status = ccsds_cfdp_decode_header(buf, len, &header, &header_len);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+
+    if (header.pdu_type != CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE ||
+        header.segment_metadata_present) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    if (header.file_size_mode != CCSDS_CFDP_FILE_SIZE_SMALL) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    if (header.pdu_data_field_len < CCSDS_CFDP_NAK_MIN_DATA_LEN ||
+        (len - header_len) < header.pdu_data_field_len) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    pdu_end = header_len + header.pdu_data_field_len;
+    remaining = header.pdu_data_field_len - CCSDS_CFDP_NAK_MIN_DATA_LEN;
+    if ((remaining % CCSDS_CFDP_NAK_RANGE_LEN) != 0u ||
+        (remaining / CCSDS_CFDP_NAK_RANGE_LEN) >
+            CCSDS_CFDP_MAX_NAK_RANGES) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    offset = header_len;
+    if (buf[offset++] != CCSDS_CFDP_DIRECTIVE_NAK) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    nak->header = header;
+    nak->scope_start = sys_get_be32(&buf[offset]);
+    offset += 4u;
+    nak->scope_end = sys_get_be32(&buf[offset]);
+    offset += 4u;
+    nak->range_count = remaining / CCSDS_CFDP_NAK_RANGE_LEN;
+    for (size_t i = 0u; i < nak->range_count; i++) {
+        nak->ranges[i].start = sys_get_be32(&buf[offset]);
+        offset += 4u;
+        nak->ranges[i].end = sys_get_be32(&buf[offset]);
+        offset += 4u;
+    }
+
+    status = nak_validate_ranges(nak);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return CCSDS_CFDP_STATUS_MALFORMED_PDU;
+    }
+
+    *consumed = pdu_end;
     return CCSDS_CFDP_STATUS_OK;
 }

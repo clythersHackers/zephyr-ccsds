@@ -58,12 +58,16 @@ struct ccsds_cfdp_transaction_slot {
     bool file_handle_open;
     void *file_handle;
     uint32_t file_size;
+    uint32_t eof_checksum;
     enum ccsds_cfdp_checksum_type checksum_type;
+    enum ccsds_cfdp_transmission_mode transmission_mode;
     ccsds_cfdp_checksum_state_t checksum_state;
     ccsds_cfdp_ranges_t received_ranges;
     char destination_path[CCSDS_CFDP_MAX_FILENAME_LEN + 1u];
     bool closure_requested;
+    bool eof_received;
     bool finished_received;
+    uint32_t nak_retry_count;
     enum ccsds_cfdp_status finished_status;
 };
 

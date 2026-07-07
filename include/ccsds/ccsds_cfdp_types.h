@@ -87,6 +87,18 @@ enum ccsds_cfdp_checksum_type {
     CCSDS_CFDP_CHECKSUM_TYPE_NULL = 15,
 };
 
+enum ccsds_cfdp_ack_directive_subtype {
+    CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_OTHER = 0,
+    CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_FINISHED = 1,
+};
+
+enum ccsds_cfdp_transaction_status {
+    CCSDS_CFDP_TRANSACTION_STATUS_UNDEFINED = 0,
+    CCSDS_CFDP_TRANSACTION_STATUS_ACTIVE = 1,
+    CCSDS_CFDP_TRANSACTION_STATUS_TERMINATED = 2,
+    CCSDS_CFDP_TRANSACTION_STATUS_UNRECOGNIZED = 3,
+};
+
 #ifdef __cplusplus
 }
 #endif

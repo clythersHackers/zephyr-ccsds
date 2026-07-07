@@ -1400,4 +1400,136 @@ ZTEST(ccsds_cfdp_pdu, test_finished_encode_rejects_short_output_buffer)
                   CCSDS_CFDP_STATUS_BUFFER_TOO_SMALL);
 }
 
+ZTEST(ccsds_cfdp_pdu, test_ack_encode_decode_eof_round_trip)
+{
+    ccsds_cfdp_ack_pdu_t ack = {
+        .header = base_header(1u, 1u),
+        .acknowledged_directive = CCSDS_CFDP_DIRECTIVE_EOF,
+        .directive_subtype = CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_OTHER,
+        .condition_code = CCSDS_CFDP_CONDITION_NO_ERROR,
+        .transaction_status = CCSDS_CFDP_TRANSACTION_STATUS_ACTIVE,
+    };
+    ccsds_cfdp_ack_pdu_t decoded;
+    uint8_t buf[16];
+    size_t len;
+    size_t consumed;
+    const uint8_t expected[] = {
+        0x2cu, 0x00u, 0x03u, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x06u, 0x40u, 0x01u,
+    };
+
+    ack.header.direction = CCSDS_CFDP_DIRECTION_TOWARD_SENDER;
+
+    zassert_equal(ccsds_cfdp_encode_ack(&ack, buf, sizeof(buf), &len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(len, sizeof(expected));
+    zassert_mem_equal(buf, expected, sizeof(expected));
+
+    ack.header.pdu_data_field_len = 3u;
+    zassert_equal(ccsds_cfdp_decode_ack(buf, len, &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(consumed, len);
+    assert_headers_equal(&ack.header, &decoded.header);
+    zassert_equal(decoded.acknowledged_directive, CCSDS_CFDP_DIRECTIVE_EOF);
+    zassert_equal(decoded.directive_subtype,
+                  CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_OTHER);
+    zassert_equal(decoded.condition_code, CCSDS_CFDP_CONDITION_NO_ERROR);
+    zassert_equal(decoded.transaction_status,
+                  CCSDS_CFDP_TRANSACTION_STATUS_ACTIVE);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_ack_encode_rejects_unsupported_directive)
+{
+    ccsds_cfdp_ack_pdu_t ack = {
+        .header = base_header(1u, 1u),
+        .acknowledged_directive = CCSDS_CFDP_DIRECTIVE_METADATA,
+        .directive_subtype = CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_OTHER,
+        .condition_code = CCSDS_CFDP_CONDITION_NO_ERROR,
+        .transaction_status = CCSDS_CFDP_TRANSACTION_STATUS_ACTIVE,
+    };
+    ccsds_cfdp_ack_pdu_t decoded;
+    uint8_t buf[16];
+    size_t len;
+    size_t consumed;
+    const uint8_t unsupported[] = {
+        0x2cu, 0x00u, 0x03u, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x06u, 0x70u, 0x01u,
+    };
+
+    zassert_equal(ccsds_cfdp_encode_ack(&ack, buf, sizeof(buf), &len),
+                  CCSDS_CFDP_STATUS_INVALID_ARGUMENT);
+    zassert_equal(ccsds_cfdp_decode_ack(unsupported, sizeof(unsupported),
+                                        &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_UNSUPPORTED);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_nak_encode_decode_multiple_ranges)
+{
+    ccsds_cfdp_nak_pdu_t nak = {
+        .header = base_header(1u, 1u),
+        .scope_start = 0u,
+        .scope_end = 20u,
+        .range_count = 2u,
+        .ranges = {
+            { .start = 4u, .end = 8u },
+            { .start = 12u, .end = 16u },
+        },
+    };
+    ccsds_cfdp_nak_pdu_t decoded;
+    uint8_t buf[40];
+    size_t len;
+    size_t consumed;
+
+    nak.header.direction = CCSDS_CFDP_DIRECTION_TOWARD_SENDER;
+    nak.header.transmission_mode = CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED;
+
+    zassert_equal(ccsds_cfdp_encode_nak(&nak, buf, sizeof(buf), &len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(len, 32u);
+
+    nak.header.pdu_data_field_len = 25u;
+    zassert_equal(ccsds_cfdp_decode_nak(buf, len, &decoded, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(consumed, len);
+    assert_headers_equal(&nak.header, &decoded.header);
+    zassert_equal(decoded.scope_start, 0u);
+    zassert_equal(decoded.scope_end, 20u);
+    zassert_equal(decoded.range_count, 2u);
+    zassert_equal(decoded.ranges[0].start, 4u);
+    zassert_equal(decoded.ranges[0].end, 8u);
+    zassert_equal(decoded.ranges[1].start, 12u);
+    zassert_equal(decoded.ranges[1].end, 16u);
+}
+
+ZTEST(ccsds_cfdp_pdu, test_nak_rejects_invalid_ranges)
+{
+    ccsds_cfdp_nak_pdu_t nak = {
+        .header = base_header(1u, 1u),
+        .scope_start = 0u,
+        .scope_end = 10u,
+        .range_count = 1u,
+        .ranges = {
+            { .start = 8u, .end = 8u },
+        },
+    };
+    ccsds_cfdp_nak_pdu_t decoded;
+    uint8_t buf[32];
+    size_t len;
+    size_t consumed;
+    const uint8_t invalid[] = {
+        0x2cu, 0x00u, 0x11u, 0x00u, 0x12u, 0x34u, 0x56u,
+        0x08u,
+        0x00u, 0x00u, 0x00u, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x0au,
+        0x00u, 0x00u, 0x00u, 0x08u,
+        0x00u, 0x00u, 0x00u, 0x08u,
+    };
+
+    zassert_equal(ccsds_cfdp_encode_nak(&nak, buf, sizeof(buf), &len),
+                  CCSDS_CFDP_STATUS_INVALID_ARGUMENT);
+    zassert_equal(ccsds_cfdp_decode_nak(invalid, sizeof(invalid), &decoded,
+                                        &consumed),
+                  CCSDS_CFDP_STATUS_MALFORMED_PDU);
+}
+
 ZTEST_SUITE(ccsds_cfdp_pdu, NULL, NULL, NULL, NULL, NULL);
