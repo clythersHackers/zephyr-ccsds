@@ -63,6 +63,7 @@ struct ccsds_cfdp_transaction_slot {
     enum ccsds_cfdp_transmission_mode transmission_mode;
     ccsds_cfdp_checksum_state_t checksum_state;
     ccsds_cfdp_ranges_t received_ranges;
+    char source_path[CCSDS_CFDP_MAX_FILENAME_LEN + 1u];
     char destination_path[CCSDS_CFDP_MAX_FILENAME_LEN + 1u];
     bool closure_requested;
     bool eof_received;
@@ -78,6 +79,7 @@ struct ccsds_cfdp_put_request {
     const char *destination_path;
     enum ccsds_cfdp_checksum_type checksum_type;
     bool closure_requested;
+    bool acknowledged_mode;
 };
 
 typedef struct ccsds_cfdp_put_request ccsds_cfdp_put_request_t;
