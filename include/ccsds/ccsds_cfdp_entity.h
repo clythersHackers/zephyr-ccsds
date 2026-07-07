@@ -54,6 +54,7 @@ struct ccsds_cfdp_transaction_slot {
     bool active;
     ccsds_cfdp_transaction_id_t id;
     uint64_t peer_entity_id;
+    const ccsds_cfdp_filestore_ops_t *filestore;
     bool metadata_received;
     bool file_handle_open;
     void *file_handle;
@@ -68,7 +69,11 @@ struct ccsds_cfdp_transaction_slot {
     bool closure_requested;
     bool eof_received;
     bool finished_received;
+    bool recovery_pending;
+    bool waiting_for_finished_ack;
     uint32_t nak_retry_count;
+    uint32_t retry_count;
+    uint64_t retry_deadline_ms;
     enum ccsds_cfdp_status finished_status;
 };
 
@@ -120,6 +125,8 @@ enum ccsds_cfdp_status
 ccsds_cfdp_entity_receive_pdu(ccsds_cfdp_entity_t *entity,
                               const ccsds_cfdp_filestore_ops_t *filestore,
                               const uint8_t *pdu, size_t pdu_len);
+
+void ccsds_cfdp_entity_poll(ccsds_cfdp_entity_t *entity, uint64_t now_ms);
 
 enum ccsds_cfdp_status
 ccsds_cfdp_entity_match_or_create_receiver_transaction(

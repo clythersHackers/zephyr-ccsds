@@ -1883,4 +1883,244 @@ ZTEST(ccsds_cfdp_entity, test_acknowledged_sender_invalid_nak_range_fails)
     zassert_equal(source_ops.close(source_ops.user, handle), 0);
 }
 
+ZTEST(ccsds_cfdp_entity, test_poll_retries_lost_finished_until_ack)
+{
+    ccsds_cfdp_entity_t entity;
+    struct send_capture capture;
+    struct receive_filestore store;
+    ccsds_cfdp_filestore_ops_t ops = receive_filestore_ops(&store);
+    const uint8_t file[] = { 'f', 'i', 'n' };
+    uint8_t metadata[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t filedata[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t eof[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t ack[CCSDS_CFDP_MAX_PDU_SIZE];
+    size_t metadata_len;
+    size_t filedata_len;
+    size_t eof_len;
+    size_t ack_len;
+    ccsds_cfdp_finished_pdu_t finished;
+    size_t consumed;
+
+    memset(&store, 0, sizeof(store));
+    init_entity_with_capture_and_clock(&entity, &capture);
+    encode_incoming_ack_metadata(0x60u, sizeof(file), metadata,
+                                 sizeof(metadata), &metadata_len);
+    encode_incoming_ack_filedata(0x60u, 0u, file, sizeof(file), filedata,
+                                 sizeof(filedata), &filedata_len);
+    encode_incoming_ack_eof(0x60u, modular_checksum(file, sizeof(file)),
+                            sizeof(file), eof, sizeof(eof), &eof_len);
+    encode_finished_ack_to_receiver(0x60u, ack, sizeof(ack), &ack_len);
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, metadata,
+                                                metadata_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, filedata,
+                                                filedata_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, eof, eof_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(capture.count, 2u);
+    zassert_true(entity.receiver.active);
+
+    ccsds_cfdp_entity_poll(&entity, 2u * CCSDS_CFDP_RETRY_INTERVAL_MS);
+
+    zassert_equal(capture.count, 3u);
+    zassert_equal(ccsds_cfdp_decode_finished(capture.pdu[2],
+                                             capture.pdu_len[2], &finished,
+                                             &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(finished.condition_code, CCSDS_CFDP_CONDITION_NO_ERROR);
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, ack, ack_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_false(entity.receiver.active);
+}
+
+ZTEST(ccsds_cfdp_entity, test_poll_retries_lost_nak_until_retransmit)
+{
+    ccsds_cfdp_entity_t entity;
+    struct send_capture capture;
+    struct receive_filestore store;
+    ccsds_cfdp_filestore_ops_t ops = receive_filestore_ops(&store);
+    const uint8_t file[] = { 0u, 1u, 2u, 3u, 4u, 5u };
+    uint8_t metadata[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t first[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t missing[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t eof[CCSDS_CFDP_MAX_PDU_SIZE];
+    size_t metadata_len;
+    size_t first_len;
+    size_t missing_len;
+    size_t eof_len;
+    ccsds_cfdp_nak_pdu_t nak;
+    size_t consumed;
+
+    memset(&store, 0, sizeof(store));
+    init_entity_with_capture_and_clock(&entity, &capture);
+    encode_incoming_ack_metadata(0x61u, sizeof(file), metadata,
+                                 sizeof(metadata), &metadata_len);
+    encode_incoming_ack_filedata(0x61u, 0u, file, 3u, first, sizeof(first),
+                                 &first_len);
+    encode_incoming_ack_filedata(0x61u, 3u, &file[3], sizeof(file) - 3u,
+                                 missing, sizeof(missing), &missing_len);
+    encode_incoming_ack_eof(0x61u, modular_checksum(file, sizeof(file)),
+                            sizeof(file), eof, sizeof(eof), &eof_len);
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, metadata,
+                                                metadata_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, first,
+                                                first_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, eof, eof_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(capture.count, 2u);
+
+    ccsds_cfdp_entity_poll(&entity, 2u * CCSDS_CFDP_RETRY_INTERVAL_MS);
+
+    zassert_equal(capture.count, 3u);
+    zassert_equal(ccsds_cfdp_decode_nak(capture.pdu[2], capture.pdu_len[2],
+                                        &nak, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(nak.range_count, 1u);
+    zassert_equal(nak.ranges[0].start, 3u);
+    zassert_equal(nak.ranges[0].end, sizeof(file));
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, missing,
+                                                missing_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_true(store.dst.exists);
+    zassert_equal(store.dst.size, sizeof(file));
+    zassert_mem_equal(store.dst.data, file, sizeof(file));
+    zassert_equal(capture.count, 4u);
+}
+
+ZTEST(ccsds_cfdp_entity, test_poll_retries_sender_eof_while_waiting_finished)
+{
+    ccsds_cfdp_entity_t entity;
+    struct send_capture capture;
+    const uint8_t file[] = { 'e', 'o', 'f' };
+    struct memory_filestore store = {
+        .data = file,
+        .size = sizeof(file),
+    };
+    ccsds_cfdp_filestore_ops_t filestore = memory_filestore_ops(&store);
+    const ccsds_cfdp_put_request_t request = acknowledged_put_request();
+    ccsds_cfdp_transaction_id_t id;
+    ccsds_cfdp_eof_pdu_t eof;
+    size_t consumed;
+
+    init_entity_with_capture_and_clock(&entity, &capture);
+
+    zassert_equal(ccsds_cfdp_entity_send_file(&entity, &filestore, &request,
+                                              &id),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_true(entity.sender.active);
+    zassert_equal(capture.count, 3u);
+    zassert_equal(store.close_count, 0u);
+
+    ccsds_cfdp_entity_poll(&entity, 2u * CCSDS_CFDP_RETRY_INTERVAL_MS);
+
+    zassert_true(entity.sender.active);
+    zassert_equal(capture.count, 4u);
+    zassert_equal(ccsds_cfdp_decode_eof(capture.pdu[3], capture.pdu_len[3],
+                                        &eof, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(eof.file_size, sizeof(file));
+
+    ccsds_cfdp_entity_release_sender_transaction(&entity);
+    zassert_equal(store.close_count, 1u);
+}
+
+ZTEST(ccsds_cfdp_entity,
+      test_poll_retries_receiver_finished_while_waiting_ack)
+{
+    ccsds_cfdp_entity_t entity;
+    struct send_capture capture;
+    struct receive_filestore store;
+    ccsds_cfdp_filestore_ops_t ops = receive_filestore_ops(&store);
+    const uint8_t file[] = { 'w', 'a', 'i', 't' };
+    uint8_t metadata[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t filedata[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t eof[CCSDS_CFDP_MAX_PDU_SIZE];
+    size_t metadata_len;
+    size_t filedata_len;
+    size_t eof_len;
+    ccsds_cfdp_finished_pdu_t finished;
+    size_t consumed;
+
+    memset(&store, 0, sizeof(store));
+    init_entity_with_capture_and_clock(&entity, &capture);
+    encode_incoming_ack_metadata(0x62u, sizeof(file), metadata,
+                                 sizeof(metadata), &metadata_len);
+    encode_incoming_ack_filedata(0x62u, 0u, file, sizeof(file), filedata,
+                                 sizeof(filedata), &filedata_len);
+    encode_incoming_ack_eof(0x62u, modular_checksum(file, sizeof(file)),
+                            sizeof(file), eof, sizeof(eof), &eof_len);
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, metadata,
+                                                metadata_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, filedata,
+                                                filedata_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, eof, eof_len),
+                  CCSDS_CFDP_STATUS_OK);
+
+    ccsds_cfdp_entity_poll(&entity, 2u * CCSDS_CFDP_RETRY_INTERVAL_MS);
+
+    zassert_equal(capture.count, 3u);
+    zassert_equal(ccsds_cfdp_decode_finished(capture.pdu[2],
+                                             capture.pdu_len[2], &finished,
+                                             &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(finished.delivery_code,
+                  CCSDS_CFDP_DELIVERY_CODE_DATA_COMPLETE);
+    zassert_true(entity.receiver.active);
+}
+
+ZTEST(ccsds_cfdp_entity, test_poll_releases_recovery_after_retry_limit)
+{
+    ccsds_cfdp_entity_t entity;
+    struct send_capture capture;
+    struct receive_filestore store;
+    ccsds_cfdp_filestore_ops_t ops = receive_filestore_ops(&store);
+    const uint8_t file[] = { 0x10u, 0x11u, 0x12u, 0x13u };
+    uint8_t metadata[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t first[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t eof[CCSDS_CFDP_MAX_PDU_SIZE];
+    size_t metadata_len;
+    size_t first_len;
+    size_t eof_len;
+
+    memset(&store, 0, sizeof(store));
+    init_entity_with_capture_and_clock(&entity, &capture);
+    encode_incoming_ack_metadata(0x63u, sizeof(file), metadata,
+                                 sizeof(metadata), &metadata_len);
+    encode_incoming_ack_filedata(0x63u, 0u, file, 2u, first, sizeof(first),
+                                 &first_len);
+    encode_incoming_ack_eof(0x63u, modular_checksum(file, sizeof(file)),
+                            sizeof(file), eof, sizeof(eof), &eof_len);
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, metadata,
+                                                metadata_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, first,
+                                                first_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, eof, eof_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_true(entity.receiver.active);
+
+    for (uint32_t i = 0u; i <= CCSDS_CFDP_MAX_NAK_ROUNDS; i++) {
+        ccsds_cfdp_entity_poll(
+            &entity, (i + 2u) * CCSDS_CFDP_RETRY_INTERVAL_MS);
+    }
+
+    zassert_false(entity.receiver.active);
+    zassert_false(store.tmp.exists);
+    zassert_false(store.dst.exists);
+    zassert_equal(store.close_count, 1u);
+    zassert_equal(store.discard_count, 1u);
+}
+
 ZTEST_SUITE(ccsds_cfdp_entity, NULL, NULL, NULL, NULL, NULL);
