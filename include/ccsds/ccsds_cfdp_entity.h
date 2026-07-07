@@ -93,6 +93,8 @@ struct ccsds_cfdp_entity {
     ccsds_cfdp_ut_ops_t ut;
     ccsds_cfdp_transaction_slot_t sender;
     ccsds_cfdp_transaction_slot_t receiver;
+    bool sender_completion_available;
+    enum ccsds_cfdp_status sender_completion_status;
     uint8_t pdu_buf[CCSDS_CFDP_MAX_PDU_SIZE];
     uint8_t file_segment_buf[CCSDS_CFDP_MAX_SEGMENT_SIZE];
 };

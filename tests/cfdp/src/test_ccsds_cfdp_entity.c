@@ -677,6 +677,38 @@ static void encode_sender_nak(uint64_t sequence, uint32_t scope_start,
                   CCSDS_CFDP_STATUS_OK);
 }
 
+static void encode_finished_ack_to_receiver(uint64_t sequence, uint8_t *buf,
+                                            size_t cap, size_t *len)
+{
+    const ccsds_cfdp_ack_pdu_t ack = {
+        .header = {
+            .version = CCSDS_CFDP_VERSION_1,
+            .pdu_type = CCSDS_CFDP_PDU_TYPE_FILE_DIRECTIVE,
+            .direction = CCSDS_CFDP_DIRECTION_TOWARD_RECEIVER,
+            .transmission_mode =
+                CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED,
+            .crc_flag = CCSDS_CFDP_CRC_NOT_PRESENT,
+            .file_size_mode = CCSDS_CFDP_FILE_SIZE_SMALL,
+            .pdu_data_field_len = 0u,
+            .segmentation_control =
+                CCSDS_CFDP_SEGMENTATION_RECORD_BOUNDARIES_NOT_PRESERVED,
+            .segment_metadata_present = false,
+            .entity_id_len = 1u,
+            .transaction_sequence_number_len = 1u,
+            .source_entity_id = 0x34u,
+            .transaction_sequence_number = sequence,
+            .destination_entity_id = 0x12u,
+        },
+        .acknowledged_directive = CCSDS_CFDP_DIRECTIVE_FINISHED,
+        .directive_subtype = CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_FINISHED,
+        .condition_code = CCSDS_CFDP_CONDITION_NO_ERROR,
+        .transaction_status = CCSDS_CFDP_TRANSACTION_STATUS_TERMINATED,
+    };
+
+    zassert_equal(ccsds_cfdp_encode_ack(&ack, buf, cap, len),
+                  CCSDS_CFDP_STATUS_OK);
+}
+
 static void assert_sender_header(const ccsds_cfdp_pdu_header_t *header,
                                  enum ccsds_cfdp_pdu_type pdu_type,
                                  uint64_t sequence)
@@ -1542,7 +1574,6 @@ ZTEST(ccsds_cfdp_entity, test_acknowledged_receiver_finishes_after_retransmit)
                                                 missing_len),
                   CCSDS_CFDP_STATUS_OK);
 
-    zassert_false(entity.receiver.active);
     zassert_true(store.dst.exists);
     zassert_equal(store.dst.size, sizeof(file));
     zassert_mem_equal(store.dst.data, file, sizeof(file));
@@ -1558,6 +1589,70 @@ ZTEST(ccsds_cfdp_entity, test_acknowledged_receiver_finishes_after_retransmit)
     zassert_equal(finished.condition_code, CCSDS_CFDP_CONDITION_NO_ERROR);
     zassert_equal(finished.delivery_code,
                   CCSDS_CFDP_DELIVERY_CODE_DATA_COMPLETE);
+
+    zassert_true(entity.receiver.active);
+    zassert_true(store.dst.exists);
+}
+
+ZTEST(ccsds_cfdp_entity,
+      test_acknowledged_receiver_releases_after_finished_ack)
+{
+    ccsds_cfdp_entity_t entity;
+    struct send_capture capture;
+    struct receive_filestore store;
+    ccsds_cfdp_filestore_ops_t ops = receive_filestore_ops(&store);
+    const uint8_t file[] = { 'a', 'c', 'k' };
+    uint8_t metadata[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t filedata[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t eof[CCSDS_CFDP_MAX_PDU_SIZE];
+    uint8_t ack[CCSDS_CFDP_MAX_PDU_SIZE];
+    size_t metadata_len;
+    size_t filedata_len;
+    size_t eof_len;
+    size_t ack_len;
+    ccsds_cfdp_ack_pdu_t eof_ack;
+    ccsds_cfdp_finished_pdu_t finished;
+    size_t consumed;
+
+    memset(&store, 0, sizeof(store));
+    init_entity_with_capture(&entity, &capture);
+    encode_incoming_ack_metadata(0x53u, sizeof(file), metadata,
+                                 sizeof(metadata), &metadata_len);
+    encode_incoming_ack_filedata(0x53u, 0u, file, sizeof(file), filedata,
+                                 sizeof(filedata), &filedata_len);
+    encode_incoming_ack_eof(0x53u, modular_checksum(file, sizeof(file)),
+                            sizeof(file), eof, sizeof(eof), &eof_len);
+    encode_finished_ack_to_receiver(0x53u, ack, sizeof(ack), &ack_len);
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, metadata,
+                                                metadata_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, filedata,
+                                                filedata_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, eof, eof_len),
+                  CCSDS_CFDP_STATUS_OK);
+
+    zassert_true(entity.receiver.active);
+    zassert_equal(capture.count, 2u);
+    zassert_true(store.dst.exists);
+    zassert_equal(store.commit_count, 1u);
+
+    zassert_equal(ccsds_cfdp_decode_ack(capture.pdu[0], capture.pdu_len[0],
+                                        &eof_ack, &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(eof_ack.acknowledged_directive, CCSDS_CFDP_DIRECTIVE_EOF);
+    zassert_equal(ccsds_cfdp_decode_finished(capture.pdu[1],
+                                             capture.pdu_len[1], &finished,
+                                             &consumed),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_equal(finished.header.transmission_mode,
+                  CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED);
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, ack, ack_len),
+                  CCSDS_CFDP_STATUS_OK);
+
+    zassert_false(entity.receiver.active);
 }
 
 ZTEST(ccsds_cfdp_entity, test_acknowledged_sender_recovers_one_dropped_chunk)
@@ -1620,6 +1715,63 @@ ZTEST(ccsds_cfdp_entity, test_acknowledged_sender_recovers_one_dropped_chunk)
     zassert_equal(loopback.dropped_count, 1u);
     zassert_equal(loopback.receiver_to_sender_count, 3u);
     zassert_equal(source_store.close_count, 1u);
+}
+
+ZTEST(ccsds_cfdp_entity, test_acknowledged_sender_no_loss_acks_finished)
+{
+    ccsds_cfdp_entity_t sender;
+    ccsds_cfdp_entity_t receiver;
+    struct closure_loopback loopback;
+    struct closure_loopback_endpoint sender_endpoint;
+    struct closure_loopback_endpoint receiver_endpoint;
+    const uint8_t file[] = { 'n', 'o', 'l', 'o', 's', 's' };
+    struct memory_filestore source_store = {
+        .data = file,
+        .size = sizeof(file),
+    };
+    struct receive_filestore dest_store;
+    ccsds_cfdp_filestore_ops_t source_ops =
+        memory_filestore_ops(&source_store);
+    ccsds_cfdp_filestore_ops_t dest_ops = receive_filestore_ops(&dest_store);
+    ccsds_cfdp_ut_ops_t sender_ut;
+    ccsds_cfdp_ut_ops_t receiver_ut;
+    const ccsds_cfdp_put_request_t request = acknowledged_put_request();
+    ccsds_cfdp_transaction_id_t id;
+
+    memset(&loopback, 0, sizeof(loopback));
+    memset(&sender_endpoint, 0, sizeof(sender_endpoint));
+    memset(&receiver_endpoint, 0, sizeof(receiver_endpoint));
+    memset(&dest_store, 0, sizeof(dest_store));
+
+    loopback.sender = &sender;
+    loopback.receiver = &receiver;
+    loopback.source_ops = &source_ops;
+    loopback.dest_ops = &dest_ops;
+    loopback.sender_endpoint = &sender_endpoint;
+    loopback.receiver_endpoint = &receiver_endpoint;
+    sender_endpoint.loopback = &loopback;
+    sender_endpoint.local_entity_id = 0x12u;
+    receiver_endpoint.loopback = &loopback;
+    receiver_endpoint.local_entity_id = 0x34u;
+    sender_ut = closure_ut(&sender_endpoint);
+    receiver_ut = closure_ut(&receiver_endpoint);
+
+    init_entity_with_custom_ut(&sender, 0x12u, 0x34u, &sender_ut);
+    init_entity_with_custom_ut(&receiver, 0x34u, 0x12u, &receiver_ut);
+
+    zassert_equal(ccsds_cfdp_entity_send_file(&sender, &source_ops, &request,
+                                              &id),
+                  CCSDS_CFDP_STATUS_OK);
+
+    zassert_false(sender.sender.active);
+    zassert_false(receiver.receiver.active);
+    zassert_true(dest_store.dst.exists);
+    zassert_equal(dest_store.dst.size, sizeof(file));
+    zassert_mem_equal(dest_store.dst.data, file, sizeof(file));
+    zassert_equal(loopback.sender_to_receiver_count, 4u);
+    zassert_equal(loopback.receiver_to_sender_count, 2u);
+    zassert_equal(loopback.last_receiver_status, CCSDS_CFDP_STATUS_OK);
+    zassert_equal(loopback.last_sender_status, CCSDS_CFDP_STATUS_OK);
 }
 
 ZTEST(ccsds_cfdp_entity, test_acknowledged_sender_recovers_multiple_dropped_chunks)
