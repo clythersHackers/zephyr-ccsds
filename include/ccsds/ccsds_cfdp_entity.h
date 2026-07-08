@@ -40,12 +40,39 @@ struct ccsds_cfdp_transaction_id {
 
 typedef struct ccsds_cfdp_transaction_id ccsds_cfdp_transaction_id_t;
 
+typedef enum {
+    CCSDS_CFDP_EVENT_TRANSACTION_STARTED,
+    CCSDS_CFDP_EVENT_METADATA_RECV,
+    CCSDS_CFDP_EVENT_FILE_SEGMENT_RECV,
+    CCSDS_CFDP_EVENT_EOF_RECV,
+    CCSDS_CFDP_EVENT_NAK_SENT,
+    CCSDS_CFDP_EVENT_NAK_RECV,
+    CCSDS_CFDP_EVENT_RETRANSMIT,
+    CCSDS_CFDP_EVENT_FINISHED_SENT,
+    CCSDS_CFDP_EVENT_FINISHED_RECV,
+    CCSDS_CFDP_EVENT_COMPLETE,
+    CCSDS_CFDP_EVENT_FAILED,
+} ccsds_cfdp_event_type_t;
+
+struct ccsds_cfdp_event {
+    ccsds_cfdp_event_type_t type;
+    ccsds_cfdp_transaction_id_t transaction_id;
+    enum ccsds_cfdp_status status;
+};
+
+typedef struct ccsds_cfdp_event ccsds_cfdp_event_t;
+
+typedef void (*ccsds_cfdp_event_cb_t)(void *user,
+                                      const ccsds_cfdp_event_t *event);
+
 struct ccsds_cfdp_entity_config {
     uint64_t local_entity_id;
     uint64_t remote_entity_id;
     uint8_t entity_id_len;
     uint8_t transaction_sequence_number_len;
     uint64_t initial_transaction_sequence_number;
+    ccsds_cfdp_event_cb_t event_cb;
+    void *event_user;
 };
 
 typedef struct ccsds_cfdp_entity_config ccsds_cfdp_entity_config_t;
@@ -96,6 +123,8 @@ struct ccsds_cfdp_entity {
     uint8_t transaction_sequence_number_len;
     uint64_t next_transaction_sequence_number;
     ccsds_cfdp_ut_ops_t ut;
+    ccsds_cfdp_event_cb_t event_cb;
+    void *event_user;
     ccsds_cfdp_transaction_slot_t sender;
     ccsds_cfdp_transaction_slot_t receiver;
     bool sender_completion_available;

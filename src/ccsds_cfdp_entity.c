@@ -50,6 +50,34 @@ static bool transaction_id_matches(const ccsds_cfdp_transaction_id_t *a,
            a->transaction_sequence_number == b->transaction_sequence_number;
 }
 
+static void emit_event(ccsds_cfdp_entity_t *entity,
+                       ccsds_cfdp_event_type_t type,
+                       const ccsds_cfdp_transaction_id_t *id,
+                       enum ccsds_cfdp_status status)
+{
+    if (entity->event_cb == NULL) {
+        return;
+    }
+
+    const ccsds_cfdp_event_t event = {
+        .type = type,
+        .transaction_id = *id,
+        .status = status,
+    };
+
+    entity->event_cb(entity->event_user, &event);
+}
+
+static void emit_terminal_event(ccsds_cfdp_entity_t *entity,
+                                const ccsds_cfdp_transaction_id_t *id,
+                                enum ccsds_cfdp_status status)
+{
+    emit_event(entity,
+               status == CCSDS_CFDP_STATUS_OK ? CCSDS_CFDP_EVENT_COMPLETE :
+                                                CCSDS_CFDP_EVENT_FAILED,
+               id, status);
+}
+
 static size_t bounded_strlen(const char *str, size_t max_len)
 {
     size_t len = 0u;
@@ -247,6 +275,26 @@ static ccsds_cfdp_transaction_id_t transaction_id_from_header(
         .source_entity_id = header->source_entity_id,
         .transaction_sequence_number = header->transaction_sequence_number,
     };
+}
+
+static bool sender_active_matches_header(const ccsds_cfdp_entity_t *entity,
+                                         const ccsds_cfdp_pdu_header_t *header)
+{
+    const ccsds_cfdp_transaction_id_t incoming =
+        transaction_id_from_header(header);
+
+    return entity->sender.active &&
+           transaction_id_matches(&entity->sender.id, &incoming);
+}
+
+static bool receiver_active_matches_header(
+    const ccsds_cfdp_entity_t *entity, const ccsds_cfdp_pdu_header_t *header)
+{
+    const ccsds_cfdp_transaction_id_t incoming =
+        transaction_id_from_header(header);
+
+    return entity->receiver.active &&
+           transaction_id_matches(&entity->receiver.id, &incoming);
 }
 
 static ccsds_cfdp_pdu_header_t receiver_response_header(
@@ -574,6 +622,34 @@ static void close_discard_receiver(ccsds_cfdp_entity_t *entity)
     }
 }
 
+static void release_sender_terminal(ccsds_cfdp_entity_t *entity,
+                                    enum ccsds_cfdp_status status)
+{
+    ccsds_cfdp_transaction_id_t id = entity->sender.id;
+
+    emit_terminal_event(entity, &id, status);
+    ccsds_cfdp_entity_release_sender_transaction(entity);
+}
+
+static void release_receiver_terminal(ccsds_cfdp_entity_t *entity,
+                                      enum ccsds_cfdp_status status)
+{
+    ccsds_cfdp_transaction_id_t id = entity->receiver.id;
+
+    emit_terminal_event(entity, &id, status);
+    ccsds_cfdp_entity_release_receiver_transaction(entity);
+}
+
+static void fail_receiver_active_transaction(ccsds_cfdp_entity_t *entity,
+                                             enum ccsds_cfdp_status status)
+{
+    if (!entity->receiver.waiting_for_finished_ack) {
+        close_discard_receiver(entity);
+    }
+
+    release_receiver_terminal(entity, status);
+}
+
 static enum ccsds_cfdp_status receiver_finish(
     ccsds_cfdp_entity_t *entity, const ccsds_cfdp_filestore_ops_t *filestore,
     enum ccsds_cfdp_status status)
@@ -602,6 +678,12 @@ static enum ccsds_cfdp_status receiver_finish(
     if (closure_requested) {
         entity->receiver.finished_status = status;
         finished_status = send_finished_for_receiver_status(entity, status);
+        if (!entity->receiver.active) {
+            if (status == CCSDS_CFDP_STATUS_OK) {
+                return finished_status;
+            }
+            return status;
+        }
     }
 
     if (entity->receiver.transmission_mode ==
@@ -614,14 +696,16 @@ static enum ccsds_cfdp_status receiver_finish(
             return status;
         }
 
-        ccsds_cfdp_entity_release_receiver_transaction(entity);
+        release_receiver_terminal(entity, finished_status);
         if (status == CCSDS_CFDP_STATUS_OK) {
             return finished_status;
         }
         return status;
     }
 
-    ccsds_cfdp_entity_release_receiver_transaction(entity);
+    release_receiver_terminal(entity, status == CCSDS_CFDP_STATUS_OK ?
+                                          finished_status :
+                                          status);
     if (status == CCSDS_CFDP_STATUS_OK) {
         return finished_status;
     }
@@ -737,6 +821,8 @@ static enum ccsds_cfdp_status sender_handle_finished(
     } else {
         entity->sender.finished_status = CCSDS_CFDP_STATUS_CANCEL_REQUEST;
     }
+    entity->sender_completion_available = true;
+    entity->sender_completion_status = entity->sender.finished_status;
 
     if (entity->sender.transmission_mode ==
         CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED) {
@@ -748,13 +834,43 @@ static enum ccsds_cfdp_status sender_handle_finished(
             return sender_fail(entity, status);
         }
 
-        entity->sender_completion_available = true;
-        entity->sender_completion_status = finished_status;
-        ccsds_cfdp_entity_release_sender_transaction(entity);
+        release_sender_terminal(entity, finished_status);
         return finished_status;
     }
 
     return entity->sender.finished_status;
+}
+
+static enum ccsds_cfdp_status sender_handle_ack(
+    ccsds_cfdp_entity_t *entity, const uint8_t *pdu, size_t pdu_len)
+{
+    ccsds_cfdp_ack_pdu_t ack;
+    ccsds_cfdp_transaction_id_t incoming;
+    size_t consumed;
+    enum ccsds_cfdp_status status;
+
+    status = ccsds_cfdp_decode_ack(pdu, pdu_len, &ack, &consumed);
+    if (status != CCSDS_CFDP_STATUS_OK) {
+        return status;
+    }
+    if (consumed != pdu_len ||
+        !incoming_finished_header_is_supported(entity, &ack.header)) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+    if (ack.acknowledged_directive != CCSDS_CFDP_DIRECTIVE_EOF ||
+        ack.directive_subtype != CCSDS_CFDP_ACK_DIRECTIVE_SUBTYPE_OTHER ||
+        ack.header.transmission_mode !=
+            CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED) {
+        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+    }
+
+    incoming = transaction_id_from_header(&ack.header);
+    if (!entity->sender.active ||
+        !transaction_id_matches(&entity->sender.id, &incoming)) {
+        return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
+    }
+
+    return CCSDS_CFDP_STATUS_OK;
 }
 
 static bool sender_nak_header_is_supported(
@@ -770,7 +886,7 @@ static enum ccsds_cfdp_status sender_fail(ccsds_cfdp_entity_t *entity,
 {
     entity->sender.finished_status = status;
     close_sender_handle(entity);
-    ccsds_cfdp_entity_release_sender_transaction(entity);
+    release_sender_terminal(entity, status);
     return status;
 }
 
@@ -1044,7 +1160,7 @@ static enum ccsds_cfdp_status receiver_handle_ack(
         return CCSDS_CFDP_STATUS_INVALID_ARGUMENT;
     }
 
-    ccsds_cfdp_entity_release_receiver_transaction(entity);
+    release_receiver_terminal(entity, entity->receiver.finished_status);
     return CCSDS_CFDP_STATUS_OK;
 }
 
@@ -1078,6 +1194,8 @@ ccsds_cfdp_entity_init(ccsds_cfdp_entity_t *entity,
     entity->next_transaction_sequence_number =
         config->initial_transaction_sequence_number;
     entity->ut = *ut;
+    entity->event_cb = config->event_cb;
+    entity->event_user = config->event_user;
 
     return CCSDS_CFDP_STATUS_OK;
 }
@@ -1247,7 +1365,7 @@ out_release:
         close_sender_handle(entity);
     }
     if (entity->sender.active) {
-        ccsds_cfdp_entity_release_sender_transaction(entity);
+        release_sender_terminal(entity, status);
     }
     entity->sender_completion_available = false;
     return status;
@@ -1281,12 +1399,24 @@ ccsds_cfdp_entity_receive_pdu(ccsds_cfdp_entity_t *entity,
         directive = pdu[header_len];
         switch (directive) {
         case CCSDS_CFDP_DIRECTIVE_FINISHED:
-            return sender_handle_finished(entity, pdu, pdu_len);
+            status = sender_handle_finished(entity, pdu, pdu_len);
+            break;
+        case CCSDS_CFDP_DIRECTIVE_ACK:
+            status = sender_handle_ack(entity, pdu, pdu_len);
+            break;
         case CCSDS_CFDP_DIRECTIVE_NAK:
-            return sender_handle_nak(entity, filestore, pdu, pdu_len);
+            status = sender_handle_nak(entity, filestore, pdu, pdu_len);
+            break;
         default:
-            return CCSDS_CFDP_STATUS_UNSUPPORTED;
+            status = CCSDS_CFDP_STATUS_UNSUPPORTED;
+            break;
         }
+
+        if (status != CCSDS_CFDP_STATUS_OK &&
+            sender_active_matches_header(entity, &header)) {
+            release_sender_terminal(entity, status);
+        }
+        return status;
     }
 
     if (!incoming_header_is_supported(entity, &header)) {
@@ -1297,7 +1427,12 @@ ccsds_cfdp_entity_receive_pdu(ccsds_cfdp_entity_t *entity,
     }
 
     if (header.pdu_type == CCSDS_CFDP_PDU_TYPE_FILE_DATA) {
-        return receiver_handle_filedata(entity, filestore, pdu, pdu_len);
+        status = receiver_handle_filedata(entity, filestore, pdu, pdu_len);
+        if (status != CCSDS_CFDP_STATUS_OK &&
+            receiver_active_matches_header(entity, &header)) {
+            fail_receiver_active_transaction(entity, status);
+        }
+        return status;
     }
 
     if (header.pdu_data_field_len == 0u || pdu_len <= header_len) {
@@ -1307,14 +1442,24 @@ ccsds_cfdp_entity_receive_pdu(ccsds_cfdp_entity_t *entity,
     directive = pdu[header_len];
     switch (directive) {
     case CCSDS_CFDP_DIRECTIVE_METADATA:
-        return receiver_handle_metadata(entity, filestore, pdu, pdu_len);
+        status = receiver_handle_metadata(entity, filestore, pdu, pdu_len);
+        break;
     case CCSDS_CFDP_DIRECTIVE_EOF:
-        return receiver_handle_eof(entity, filestore, pdu, pdu_len);
+        status = receiver_handle_eof(entity, filestore, pdu, pdu_len);
+        break;
     case CCSDS_CFDP_DIRECTIVE_ACK:
-        return receiver_handle_ack(entity, pdu, pdu_len);
+        status = receiver_handle_ack(entity, pdu, pdu_len);
+        break;
     default:
-        return CCSDS_CFDP_STATUS_UNSUPPORTED;
+        status = CCSDS_CFDP_STATUS_UNSUPPORTED;
+        break;
     }
+
+    if (status != CCSDS_CFDP_STATUS_OK &&
+        receiver_active_matches_header(entity, &header)) {
+        fail_receiver_active_transaction(entity, status);
+    }
+    return status;
 }
 
 void ccsds_cfdp_entity_poll(ccsds_cfdp_entity_t *entity, uint64_t now_ms)
@@ -1330,7 +1475,8 @@ void ccsds_cfdp_entity_poll(ccsds_cfdp_entity_t *entity, uint64_t now_ms)
         retry_due(&entity->receiver, now_ms)) {
         if (entity->receiver.retry_count >= CCSDS_CFDP_MAX_NAK_ROUNDS) {
             close_discard_receiver(entity);
-            ccsds_cfdp_entity_release_receiver_transaction(entity);
+            release_receiver_terminal(
+                entity, CCSDS_CFDP_STATUS_INACTIVITY_DETECTED);
         } else {
             status = send_nak_for_missing_ranges(entity);
             if (status == CCSDS_CFDP_STATUS_OK) {
@@ -1338,7 +1484,7 @@ void ccsds_cfdp_entity_poll(ccsds_cfdp_entity_t *entity, uint64_t now_ms)
                 arm_retry(&entity->receiver, now_ms);
             } else {
                 close_discard_receiver(entity);
-                ccsds_cfdp_entity_release_receiver_transaction(entity);
+                release_receiver_terminal(entity, status);
             }
         }
     }
@@ -1349,7 +1495,8 @@ void ccsds_cfdp_entity_poll(ccsds_cfdp_entity_t *entity, uint64_t now_ms)
         entity->receiver.waiting_for_finished_ack &&
         retry_due(&entity->receiver, now_ms)) {
         if (entity->receiver.retry_count >= CCSDS_CFDP_MAX_NAK_ROUNDS) {
-            ccsds_cfdp_entity_release_receiver_transaction(entity);
+            release_receiver_terminal(
+                entity, CCSDS_CFDP_STATUS_INACTIVITY_DETECTED);
         } else {
             status = send_finished_for_receiver_status(
                 entity, entity->receiver.finished_status);
@@ -1357,7 +1504,7 @@ void ccsds_cfdp_entity_poll(ccsds_cfdp_entity_t *entity, uint64_t now_ms)
                 entity->receiver.retry_count++;
                 arm_retry(&entity->receiver, now_ms);
             } else {
-                ccsds_cfdp_entity_release_receiver_transaction(entity);
+                release_receiver_terminal(entity, status);
             }
         }
     }
