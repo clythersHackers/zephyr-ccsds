@@ -338,6 +338,7 @@ ZTEST(ccsds_cfdp_space_packet, test_loopback_space_packet_adapter_transfers_file
                                            link_send_packet, &sender_link);
     receiver_adapter_config = adapter_config(0x12u, 0x102u, 0x101u,
                                              link_send_packet, &receiver_link);
+    receiver_adapter_config.packet_type = CCSDS_PACKET_TYPE_TM;
     zassert_equal(ccsds_cfdp_space_packet_adapter_init(&sender_adapter,
                                                        &sender_adapter_config),
                   CCSDS_CFDP_STATUS_OK);

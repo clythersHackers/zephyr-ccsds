@@ -62,7 +62,7 @@ static int cfdp_space_packet_rx_handler(
 
     if (adapter == NULL || packet == NULL || packet->payload == NULL ||
         adapter->receive_entity == NULL || packet->version != 0u ||
-        packet->type != adapter->packet_type || packet->secondary_header ||
+        packet->secondary_header ||
         packet->sequence_flags != CCSDS_SEQUENCE_UNSEGMENTED ||
         packet->payload_len == 0u ||
         packet->payload_len > CCSDS_CFDP_MAX_PDU_SIZE) {
