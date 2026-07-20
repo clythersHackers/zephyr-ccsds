@@ -8,6 +8,7 @@
 #include "ccsds/ccsds_bch.h"
 #include "ccsds/ccsds_profile.h"
 #include "ccsds/ccsds_tc_segment.h"
+#include "ccsds/ccsds_udp.h"
 
 static int hex_nibble(char c)
 {
@@ -355,6 +356,34 @@ ZTEST(ccsds_profile, test_configured_unit_dispatch_uses_complete_cltu_path)
     zassert_ok(ccsds_profile_input_dispatch_unit(&input, cltu, cltu_len));
     zassert_false(profile.vc_state.lockout_flag);
     zassert_false(profile.vc_state.retransmit_flag);
+}
+
+ZTEST(ccsds_profile, test_udp_datagram_handoff_uses_configured_input_path)
+{
+    static const char unlock_cltu_hex[] =
+        "eb90307b0007000055f07555555555555522c5c5c5c5c5c5c579";
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    struct ccsds_profile_input input;
+    struct ccsds_udp_stats stats_before;
+    struct ccsds_udp_stats stats_after;
+    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len = 0u;
+
+    zassert_ok(decode_hex_fixture(unlock_cltu_hex, cltu, sizeof(cltu),
+                                  &cltu_len));
+    ccsds_router_init(&router);
+    ccsds_profile_tc_rx_init(&profile, &router);
+    ccsds_profile_input_init(&input, &router, &profile);
+    profile.vc_state.lockout_flag = true;
+
+    ccsds_udp_get_stats(&stats_before);
+    zassert_ok(ccsds_udp_dispatch_datagram(&input, cltu, cltu_len));
+    ccsds_udp_get_stats(&stats_after);
+
+    zassert_false(profile.vc_state.lockout_flag);
+    zassert_equal(stats_after.datagrams_received,
+                  stats_before.datagrams_received + 1u);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_accepts_set_vr_control_frame)
