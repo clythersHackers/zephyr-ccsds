@@ -1,11 +1,13 @@
 #include "ccsds_profile.h"
 
+#include <zephyr/sys/__assert.h>
+
+#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
 #include <errno.h>
 #include <string.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/__assert.h>
 #include <zephyr/sys/util.h>
 
 #ifdef CONFIG_AKIRA_CCSDS_TC_RND
@@ -490,9 +492,48 @@ void ccsds_profile_tc_rx_reset_stats(void)
     memset(&tc_rx_stats, 0, sizeof(tc_rx_stats));
     k_mutex_unlock(&tc_rx_stats_lock);
 }
+#endif /* CONFIG_AKIRA_CCSDS_FRAME_SUPPORT */
 
 int ccsds_profile_packet_dispatch(struct ccsds_router *router,
                                   const uint8_t *packet, size_t packet_len)
 {
     return ccsds_router_dispatch_bytes(router, packet, packet_len);
+}
+
+void ccsds_profile_input_init(struct ccsds_profile_input *input,
+                              struct ccsds_router *router,
+#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+                              struct ccsds_profile_tc_rx *tc_rx
+#else
+                              void *tc_rx
+#endif
+)
+{
+    __ASSERT(input != NULL, "CCSDS input profile is NULL");
+    __ASSERT(router != NULL, "CCSDS input router is NULL");
+
+    input->router = router;
+
+#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+    __ASSERT(tc_rx != NULL, "CCSDS input TC profile is NULL");
+    input->tc_rx = tc_rx;
+#else
+    (void)tc_rx;
+#endif
+}
+
+int ccsds_profile_input_dispatch_unit(struct ccsds_profile_input *input,
+                                      const uint8_t *unit, size_t unit_len)
+{
+    __ASSERT(input != NULL, "CCSDS input profile is NULL");
+    __ASSERT(input->router != NULL, "CCSDS input router is NULL");
+    __ASSERT(unit != NULL, "CCSDS input unit is NULL");
+
+#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+    __ASSERT(input->tc_rx != NULL, "CCSDS input TC profile is NULL");
+
+    return ccsds_profile_tc_cltu_dispatch(input->tc_rx, unit, unit_len);
+#else
+    return ccsds_profile_packet_dispatch(input->router, unit, unit_len);
+#endif
 }

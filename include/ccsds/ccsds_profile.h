@@ -6,14 +6,18 @@
 #ifndef AKIRA_CCSDS_PROFILE_H
 #define AKIRA_CCSDS_PROFILE_H
 
-#include "ccsds_cltu.h"
 #include "ccsds_router.h"
+
+#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#include "ccsds_cltu.h"
 #include "ccsds_tc_frame.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
 struct ccsds_profile_tc_vc_state {
     bool no_rf_available_flag;
     bool no_bit_lock_flag;
@@ -127,6 +131,47 @@ int ccsds_profile_tc_build_clcw(const struct ccsds_profile_tc_rx *profile,
  * @return 0 on success, or -EINVAL for an invalid configured TC VCID.
  */
 int ccsds_profile_tc_clcw_provider(uint32_t *clcw, void *user_data);
+#endif /* CONFIG_AKIRA_CCSDS_FRAME_SUPPORT */
+
+struct ccsds_profile_input {
+    struct ccsds_router *router;
+#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+    struct ccsds_profile_tc_rx *tc_rx;
+#endif
+};
+
+/**
+ * @brief Initialize the central CCSDS bounded-input profile.
+ *
+ * In frame-support builds the bounded input unit is one complete TC CLTU and
+ * @p tc_rx supplies the existing TC receive profile. In packet-only builds the
+ * bounded input unit is one encoded CCSDS Space Packet and @p router supplies
+ * the APID dispatch table.
+ *
+ * @param input Input profile instance to initialize.
+ * @param router APID router used by packet-level dispatch.
+ * @param tc_rx TC receive profile used only when frame support is enabled.
+ */
+void ccsds_profile_input_init(struct ccsds_profile_input *input,
+                              struct ccsds_router *router,
+#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+                              struct ccsds_profile_tc_rx *tc_rx
+#else
+                              void *tc_rx
+#endif
+);
+
+/**
+ * @brief Dispatch one bounded CCSDS input unit at the configured layer.
+ *
+ * @param input Initialized input profile.
+ * @param unit Complete bounded input unit bytes.
+ * @param unit_len Length of @p unit in bytes.
+ *
+ * @return 0 on success, or a negative errno from decode/profile/router logic.
+ */
+int ccsds_profile_input_dispatch_unit(struct ccsds_profile_input *input,
+                                      const uint8_t *unit, size_t unit_len);
 
 /**
  * @brief Decode encoded Space Packet bytes and dispatch them through a router.

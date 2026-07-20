@@ -81,6 +81,102 @@ struct packet_capture {
     uint32_t count;
 };
 
+static int capture_profile_packet_handler(
+    const struct ccsds_space_packet *packet, void *user_data)
+{
+    struct packet_capture *capture = user_data;
+
+    zassert_not_null(packet);
+    zassert_not_null(capture);
+    zassert_true(packet->payload_len <= sizeof(capture->payload));
+
+    capture->apid = packet->apid;
+    capture->payload_len = packet->payload_len;
+    memcpy(capture->payload, packet->payload, packet->payload_len);
+    capture->count++;
+
+    return 0;
+}
+
+static void build_space_packet(uint8_t *buf, size_t cap, size_t *len,
+                               uint16_t apid, const uint8_t *payload,
+                               size_t payload_len)
+{
+    struct ccsds_space_packet packet = {
+        .version = 0u,
+        .type = CCSDS_PACKET_TYPE_TC,
+        .secondary_header = false,
+        .apid = apid,
+        .sequence_flags = CCSDS_SEQUENCE_UNSEGMENTED,
+        .sequence_count = 7u,
+        .payload = payload,
+        .payload_len = payload_len,
+    };
+
+    zassert_ok(ccsds_space_packet_encode(&packet, buf, cap, len));
+}
+
+ZTEST(ccsds_profile, test_packet_unit_dispatch_reaches_registered_apid)
+{
+    enum {
+        TEST_APID = 0x321u,
+    };
+    static const uint8_t payload[] = {0xde, 0xad, 0xbe, 0xef};
+    struct ccsds_router router;
+    struct packet_capture capture = {0};
+    uint8_t packet[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + sizeof(payload)];
+    size_t packet_len = 0u;
+
+    ccsds_router_init(&router);
+    zassert_ok(ccsds_router_register_apid(
+        &router, TEST_APID, capture_profile_packet_handler, &capture));
+    build_space_packet(packet, sizeof(packet), &packet_len, TEST_APID,
+                       payload, sizeof(payload));
+
+    zassert_ok(ccsds_profile_packet_dispatch(&router, packet, packet_len));
+    zassert_equal(capture.count, 1u);
+    zassert_equal(capture.apid, TEST_APID);
+    zassert_equal(capture.payload_len, sizeof(payload));
+    zassert_mem_equal(capture.payload, payload, sizeof(payload));
+}
+
+ZTEST(ccsds_profile, test_packet_unit_malformed_input_does_not_dispatch)
+{
+    enum {
+        TEST_APID = 0x322u,
+    };
+    struct ccsds_router router;
+    struct packet_capture capture = {0};
+    uint8_t short_packet[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN - 1u] = {0};
+
+    ccsds_router_init(&router);
+    zassert_ok(ccsds_router_register_apid(
+        &router, TEST_APID, capture_profile_packet_handler, &capture));
+
+    zassert_equal(ccsds_profile_packet_dispatch(&router, short_packet,
+                                               sizeof(short_packet)),
+                  -EINVAL);
+    zassert_equal(capture.count, 0u);
+}
+
+ZTEST(ccsds_profile, test_packet_unit_unregistered_apid_returns_no_entry)
+{
+    enum {
+        TEST_APID = 0x323u,
+    };
+    static const uint8_t payload[] = {0x01};
+    struct ccsds_router router;
+    uint8_t packet[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + sizeof(payload)];
+    size_t packet_len = 0u;
+
+    ccsds_router_init(&router);
+    build_space_packet(packet, sizeof(packet), &packet_len, TEST_APID,
+                       payload, sizeof(payload));
+
+    zassert_equal(ccsds_profile_packet_dispatch(&router, packet, packet_len),
+                  -ENOENT);
+}
+
 static void build_tc_frame(uint8_t *buf, size_t len, uint16_t scid,
                            uint8_t vcid, uint8_t fsn)
 {
@@ -236,6 +332,29 @@ ZTEST(ccsds_profile, test_tc_dispatch_accepts_unlock_control_frame)
     zassert_equal(stats.packets_dispatched, 0u);
     zassert_equal(stats.dispatch_failures, 0u);
     zassert_equal(stats.last_error, 0);
+}
+
+ZTEST(ccsds_profile, test_configured_unit_dispatch_uses_complete_cltu_path)
+{
+    static const char unlock_cltu_hex[] =
+        "eb90307b0007000055f07555555555555522c5c5c5c5c5c5c579";
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    struct ccsds_profile_input input;
+    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len = 0u;
+
+    zassert_ok(decode_hex_fixture(unlock_cltu_hex, cltu, sizeof(cltu),
+                                  &cltu_len));
+    ccsds_router_init(&router);
+    ccsds_profile_tc_rx_init(&profile, &router);
+    profile.vc_state.lockout_flag = true;
+    profile.vc_state.retransmit_flag = true;
+    ccsds_profile_input_init(&input, &router, &profile);
+
+    zassert_ok(ccsds_profile_input_dispatch_unit(&input, cltu, cltu_len));
+    zassert_false(profile.vc_state.lockout_flag);
+    zassert_false(profile.vc_state.retransmit_flag);
 }
 
 ZTEST(ccsds_profile, test_tc_dispatch_accepts_set_vr_control_frame)
