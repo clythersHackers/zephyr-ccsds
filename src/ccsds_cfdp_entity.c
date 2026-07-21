@@ -751,19 +751,15 @@ static enum ccsds_cfdp_status receiver_handle_metadata(
 
     memset(entity->receiver.destination_path, 0,
            sizeof(entity->receiver.destination_path));
+    memset(entity->receiver.source_path, 0,
+           sizeof(entity->receiver.source_path));
+    memcpy(entity->receiver.source_path, metadata.source_filename.value,
+           metadata.source_filename.len);
     memcpy(entity->receiver.destination_path,
            metadata.destination_filename.value, metadata.destination_filename.len);
 
-    if (filestore->open_write_tmp(filestore->user,
-                                  entity->receiver.destination_path,
-                                  &entity->receiver.file_handle) != 0) {
-        memset(&entity->receiver, 0, sizeof(entity->receiver));
-        return CCSDS_CFDP_STATUS_FILESTORE_REJECTION;
-    }
-
     entity->receiver.active = true;
     entity->receiver.metadata_received = true;
-    entity->receiver.file_handle_open = true;
     entity->receiver.filestore = filestore;
     entity->receiver.id = incoming;
     entity->receiver.peer_entity_id = metadata.header.source_entity_id;
@@ -774,6 +770,17 @@ static enum ccsds_cfdp_status receiver_handle_metadata(
         metadata.closure_requested ||
         metadata.header.transmission_mode ==
             CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED;
+
+    if (filestore->open_write_tmp(filestore->user,
+                                  entity->receiver.destination_path,
+                                  &entity->receiver.file_handle) != 0) {
+        emit_terminal_event(entity, &incoming,
+                            CCSDS_CFDP_STATUS_FILESTORE_REJECTION);
+        memset(&entity->receiver, 0, sizeof(entity->receiver));
+        return CCSDS_CFDP_STATUS_FILESTORE_REJECTION;
+    }
+
+    entity->receiver.file_handle_open = true;
 
     return CCSDS_CFDP_STATUS_OK;
 }
@@ -1084,6 +1091,8 @@ static enum ccsds_cfdp_status receiver_handle_eof(
         return status;
     }
 
+    entity->receiver.eof_checksum = eof.file_checksum;
+
     if (eof.condition_code != CCSDS_CFDP_CONDITION_NO_ERROR ||
         eof.file_size != entity->receiver.file_size) {
         if (entity->receiver.transmission_mode ==
@@ -1275,7 +1284,11 @@ ccsds_cfdp_entity_send_file(ccsds_cfdp_entity_t *entity,
         CCSDS_CFDP_TRANSMISSION_MODE_ACKNOWLEDGED :
         CCSDS_CFDP_TRANSMISSION_MODE_UNACKNOWLEDGED;
     memset(entity->sender.source_path, 0, sizeof(entity->sender.source_path));
+    memset(entity->sender.destination_path, 0,
+           sizeof(entity->sender.destination_path));
     memcpy(entity->sender.source_path, request->source_path, source_len);
+    memcpy(entity->sender.destination_path, request->destination_path,
+           destination_len);
     *transaction_id = allocated;
 
     if (filestore->open_read(filestore->user, request->source_path, &handle,
