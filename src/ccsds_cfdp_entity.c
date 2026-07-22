@@ -1091,6 +1091,11 @@ static enum ccsds_cfdp_status receiver_handle_eof(
         return status;
     }
 
+    if (entity->receiver.waiting_for_finished_ack) {
+        return send_finished_for_receiver_status(
+            entity, entity->receiver.finished_status);
+    }
+
     entity->receiver.eof_checksum = eof.file_checksum;
 
     if (eof.condition_code != CCSDS_CFDP_CONDITION_NO_ERROR ||
@@ -1418,7 +1423,8 @@ ccsds_cfdp_entity_receive_pdu(ccsds_cfdp_entity_t *entity,
             status = sender_handle_ack(entity, pdu, pdu_len);
             break;
         case CCSDS_CFDP_DIRECTIVE_NAK:
-            status = sender_handle_nak(entity, filestore, pdu, pdu_len);
+            status = sender_handle_nak(entity, entity->sender.filestore, pdu,
+                                       pdu_len);
             break;
         default:
             status = CCSDS_CFDP_STATUS_UNSUPPORTED;

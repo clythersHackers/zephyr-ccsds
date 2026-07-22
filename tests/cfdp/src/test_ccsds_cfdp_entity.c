@@ -167,7 +167,7 @@ static int closure_loopback_send_pdu(void *user, uint64_t dest_entity_id,
         loopback->receiver_to_sender_count++;
         loopback->last_sender_status =
             ccsds_cfdp_entity_receive_pdu(loopback->sender,
-                                          loopback->source_ops, pdu, pdu_len);
+                                          loopback->dest_ops, pdu, pdu_len);
         return 0;
     }
 
@@ -1660,6 +1660,13 @@ ZTEST(ccsds_cfdp_entity, test_acknowledged_receiver_finishes_after_retransmit)
 
     zassert_true(entity.receiver.active);
     zassert_true(store.dst.exists);
+
+    zassert_equal(ccsds_cfdp_entity_receive_pdu(&entity, &ops, eof, eof_len),
+                  CCSDS_CFDP_STATUS_OK);
+    zassert_true(entity.receiver.active);
+    zassert_equal(store.commit_count, 1u);
+    zassert_equal(store.discard_count, 0u);
+    zassert_equal(capture.count, 4u);
 }
 
 ZTEST(ccsds_cfdp_entity,
@@ -1940,6 +1947,7 @@ ZTEST(ccsds_cfdp_entity, test_acknowledged_sender_invalid_nak_range_fails)
     zassert_equal(file_size, sizeof(file));
     entity.sender.file_handle_open = true;
     entity.sender.file_handle = handle;
+    entity.sender.filestore = &source_ops;
 
     encode_sender_nak(id.transaction_sequence_number, 0u, sizeof(file) + 1u,
                       &range, 1u, nak, sizeof(nak), &nak_len);
@@ -1948,7 +1956,7 @@ ZTEST(ccsds_cfdp_entity, test_acknowledged_sender_invalid_nak_range_fails)
                                                 nak_len),
                   CCSDS_CFDP_STATUS_FILE_SIZE_ERROR);
     zassert_false(entity.sender.active);
-    zassert_equal(source_ops.close(source_ops.user, handle), 0);
+    zassert_equal(source_store.close_count, 1u);
 }
 
 ZTEST(ccsds_cfdp_entity, test_poll_retries_lost_finished_until_ack)
