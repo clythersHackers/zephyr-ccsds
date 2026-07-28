@@ -114,7 +114,7 @@ int ccsds_tm_frame_get_vc_route(uint8_t vcid,
  *
  * This schedules the generator immediately. Follow-up generator cycles use
  * @p active_delay after queued packet data is observed, or @p idle_delay when
- * all VC queues are idle. This slice does not build TM frames yet.
+ * all VC queues are idle.
  *
  * @param active_delay Delay after a packet-bearing generator cycle.
  * @param idle_delay Delay after an idle generator cycle.

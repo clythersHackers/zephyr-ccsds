@@ -5,6 +5,8 @@ channel-coding, UDP adaptation, and CFDP components for Zephyr applications.
 
 - [User guide](doc/index.md)
 - [Space Packet round-trip sample](samples/space_packet/README.md)
+- Follow-up plans: [CFDP](doc/CFDP_PLAN.md), [TC](doc/TC_PLAN.md), and
+  [TM](doc/TM_PLAN.md)
 - Module tests: `west twister -T tests -p native_sim --inline-logs`
 - Samples: `west twister -T samples -p native_sim --inline-logs`
 - CFDP UDP integration: `tests/cfdp_udp/run_cfdp_udp_integration.sh`
