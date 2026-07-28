@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-# Load only the CCSDS module so this test remains independent of AkiraOS.
+# Load only the CCSDS module so this test remains consumer-independent.
 set(ZEPHYR_MODULES "${CMAKE_CURRENT_LIST_DIR}/../..")
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})

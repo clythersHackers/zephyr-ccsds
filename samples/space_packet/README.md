@@ -7,7 +7,7 @@ only the public module API and neutral configuration.
 From a Zephyr workspace containing this module:
 
 ```sh
-west build -b native_sim modules/ccsds/samples/space_packet \
+west build -b native_sim samples/space_packet \
   -d build/ccsds-space-packet
 ./build/ccsds-space-packet/zephyr/zephyr.exe
 ```
@@ -23,5 +23,5 @@ decoding failures print a failure line instead. The successful result can also
 be verified automatically with:
 
 ```sh
-west twister -T modules/ccsds/samples -p native_sim --inline-logs
+west twister -T samples -p native_sim --inline-logs
 ```

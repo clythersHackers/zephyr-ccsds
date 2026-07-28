@@ -31,8 +31,8 @@ The standards themselves are not distributed with this module.
 
 ## Add the module to an application
 
-Make `modules/ccsds` a Zephyr module by adding it as a west manifest project or
-by passing its absolute path in `ZEPHYR_EXTRA_MODULES`. Zephyr discovers
+Make this repository a Zephyr module by adding it as a west manifest project
+or by passing its absolute path in `ZEPHYR_EXTRA_MODULES`. Zephyr discovers
 `zephyr/module.yml`, which loads the module Kconfig and CMake files. Application
 code includes public headers with paths such as:
 
@@ -246,7 +246,7 @@ the application retains responsibility for transport availability.
 Build and run the deterministic Space Packet sample from a Zephyr workspace:
 
 ```sh
-west build -b native_sim modules/ccsds/samples/space_packet \
+west build -b native_sim samples/space_packet \
   -d build/ccsds-space-packet
 ./build/ccsds-space-packet/zephyr/zephyr.exe
 ```
@@ -262,8 +262,8 @@ Stop the native simulator with Ctrl+C after the result is printed.
 Run module tests and sample verification:
 
 ```sh
-west twister -T modules/ccsds/tests -p native_sim --inline-logs
-west twister -T modules/ccsds/samples -p native_sim --inline-logs
+west twister -T tests -p native_sim --inline-logs
+west twister -T samples -p native_sim --inline-logs
 ```
 
 The module tests cover primitives, frames/profiles, CFDP, and module discovery.

@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-list(APPEND ZEPHYR_EXTRA_MODULES ${CMAKE_CURRENT_LIST_DIR}/../../modules/ccsds)
+list(APPEND ZEPHYR_EXTRA_MODULES ${CMAKE_CURRENT_LIST_DIR}/../..)
 set(KCONFIG_ROOT ${CMAKE_CURRENT_LIST_DIR}/Kconfig)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
