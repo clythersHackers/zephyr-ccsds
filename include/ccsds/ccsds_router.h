@@ -3,8 +3,8 @@
  * @brief Fixed-size APID router for decoded CCSDS Space Packets.
  */
 
-#ifndef AKIRA_CCSDS_ROUTER_H
-#define AKIRA_CCSDS_ROUTER_H
+#ifndef CCSDS_ROUTER_H
+#define CCSDS_ROUTER_H
 
 #include "ccsds_space_packet.h"
 
@@ -31,7 +31,7 @@ struct ccsds_router_entry {
 };
 
 struct ccsds_router {
-    struct ccsds_router_entry entries[CONFIG_AKIRA_CCSDS_ROUTER_MAX_APIDS];
+    struct ccsds_router_entry entries[CONFIG_CCSDS_ROUTER_MAX_APIDS];
 };
 
 /**
@@ -97,4 +97,4 @@ int ccsds_router_dispatch_bytes(struct ccsds_router *router,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_ROUTER_H */
+#endif /* CCSDS_ROUTER_H */

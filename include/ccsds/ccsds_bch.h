@@ -3,8 +3,8 @@
  * @brief CCSDS BCH(63,56) primitive boundary.
  */
 
-#ifndef AKIRA_CCSDS_BCH_H
-#define AKIRA_CCSDS_BCH_H
+#ifndef CCSDS_BCH_H
+#define CCSDS_BCH_H
 
 #include "ccsds_types.h"
 
@@ -45,4 +45,4 @@ int ccsds_bch_decode_block(const uint8_t block[CCSDS_BCH_BLOCK_SIZE],
 }
 #endif
 
-#endif /* AKIRA_CCSDS_BCH_H */
+#endif /* CCSDS_BCH_H */

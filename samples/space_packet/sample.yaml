@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
+sample:
+  name: CCSDS Space Packet round trip
+tests:
+  sample.ccsds.space_packet:
+    tags:
+      - ccsds
+      - sample
+    platform_allow:
+      - native_sim
+    harness: console
+    harness_config:
+      type: one_line
+      regex:
+        - "CCSDS Space Packet round trip OK: APID=1 sequence=42 payload=deadbeef"

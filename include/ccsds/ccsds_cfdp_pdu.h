@@ -1,10 +1,10 @@
 /**
  * @file ccsds_cfdp_pdu.h
- * @brief CCSDS CFDP fixed PDU header codec for the AkiraOS subset.
+ * @brief CCSDS CFDP fixed PDU header codec.
  */
 
-#ifndef AKIRA_CCSDS_CFDP_PDU_H
-#define AKIRA_CCSDS_CFDP_PDU_H
+#ifndef CCSDS_CFDP_PDU_H
+#define CCSDS_CFDP_PDU_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -407,4 +407,4 @@ enum ccsds_cfdp_status ccsds_cfdp_decode_nak(const uint8_t *buf, size_t len,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CFDP_PDU_H */
+#endif /* CCSDS_CFDP_PDU_H */

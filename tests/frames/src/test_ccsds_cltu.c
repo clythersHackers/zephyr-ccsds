@@ -247,8 +247,8 @@ ZTEST(ccsds_cltu, test_decode_accepts_recorded_valid_cltus)
             .decoded_len = 259u,
         },
     };
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
-    uint8_t frame[CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
+    uint8_t frame[CONFIG_CCSDS_MAX_FRAME_LEN];
 
     for (size_t i = 0u; i < ARRAY_SIZE(fixtures); i++) {
         size_t cltu_len = 0u;

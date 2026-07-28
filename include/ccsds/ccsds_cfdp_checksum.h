@@ -1,10 +1,10 @@
 /**
  * @file ccsds_cfdp_checksum.h
- * @brief CCSDS CFDP file checksum helpers for the AkiraOS subset.
+ * @brief CCSDS CFDP file checksum helpers.
  */
 
-#ifndef AKIRA_CCSDS_CFDP_CHECKSUM_H
-#define AKIRA_CCSDS_CFDP_CHECKSUM_H
+#ifndef CCSDS_CFDP_CHECKSUM_H
+#define CCSDS_CFDP_CHECKSUM_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -131,4 +131,4 @@ ccsds_cfdp_checksum_finish_file(const ccsds_cfdp_checksum_state_t *state,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CFDP_CHECKSUM_H */
+#endif /* CCSDS_CFDP_CHECKSUM_H */

@@ -3,8 +3,8 @@
  * @brief CCSDS TM transfer frame packet admission boundary.
  */
 
-#ifndef AKIRA_CCSDS_TM_FRAME_H
-#define AKIRA_CCSDS_TM_FRAME_H
+#ifndef CCSDS_TM_FRAME_H
+#define CCSDS_TM_FRAME_H
 
 #include "ccsds_types.h"
 
@@ -144,4 +144,4 @@ int ccsds_tm_frame_add(uint8_t vcid, const uint8_t *packet, size_t packet_len,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_TM_FRAME_H */
+#endif /* CCSDS_TM_FRAME_H */

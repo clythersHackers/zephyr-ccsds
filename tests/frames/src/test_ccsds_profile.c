@@ -70,7 +70,7 @@ static void profile_setup(void *fixture)
 static const char short_data_cltu_hex[] =
     "eb90007b00191fc0186410c006000b100e16020000010319008800bbe915465555d2c5c5c5c5c5c5c579";
 #define TEST_SHORT_DATA_FSN 0x1fu
-#define TEST_COP1_HALF_WINDOW (CONFIG_AKIRA_CCSDS_COP1_WINDOW_SIZE / 2u)
+#define TEST_COP1_HALF_WINDOW (CONFIG_CCSDS_COP1_WINDOW_SIZE / 2u)
 #define TEST_TC_HDR_LEN 5u
 #define TEST_SEG_HDR(boundary, map_id) \
     (uint8_t)((((uint8_t)(boundary) & 0x03u) << 6) | ((map_id) & 0x3fu))
@@ -273,7 +273,7 @@ static void build_tc_segment_cltu(enum ccsds_tc_segment_boundary boundary,
                        segment_data_len;
 
     zassert_true(frame_len <= sizeof(frame));
-    build_tc_frame(frame, frame_len, CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 0u,
+    build_tc_frame(frame, frame_len, CONFIG_CCSDS_SPACECRAFT_ID, 0u,
                    fsn);
     frame[TEST_TC_HDR_LEN] = TEST_SEG_HDR(boundary, map_id);
     memcpy(&frame[TEST_TC_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN], segment_data,
@@ -313,7 +313,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_accepts_unlock_control_frame)
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
     struct ccsds_profile_tc_rx_stats stats;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(unlock_cltu_hex, cltu, sizeof(cltu),
@@ -342,7 +342,7 @@ ZTEST(ccsds_profile, test_configured_unit_dispatch_uses_complete_cltu_path)
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
     struct ccsds_profile_input input;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(unlock_cltu_hex, cltu, sizeof(cltu),
@@ -358,6 +358,12 @@ ZTEST(ccsds_profile, test_configured_unit_dispatch_uses_complete_cltu_path)
     zassert_false(profile.vc_state.retransmit_flag);
 }
 
+static int udp_dispatch_profile(void *user, const uint8_t *unit,
+                                size_t unit_len)
+{
+    return ccsds_profile_input_dispatch_unit(user, unit, unit_len);
+}
+
 ZTEST(ccsds_profile, test_udp_datagram_handoff_uses_configured_input_path)
 {
     static const char unlock_cltu_hex[] =
@@ -365,9 +371,10 @@ ZTEST(ccsds_profile, test_udp_datagram_handoff_uses_configured_input_path)
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
     struct ccsds_profile_input input;
+    struct ccsds_udp udp;
     struct ccsds_udp_stats stats_before;
     struct ccsds_udp_stats stats_after;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(unlock_cltu_hex, cltu, sizeof(cltu),
@@ -376,10 +383,21 @@ ZTEST(ccsds_profile, test_udp_datagram_handoff_uses_configured_input_path)
     ccsds_profile_tc_rx_init(&profile, &router);
     ccsds_profile_input_init(&input, &router, &profile);
     profile.vc_state.lockout_flag = true;
+    const struct ccsds_udp_config udp_config = {
+        .local_ip = "127.0.0.1",
+        .local_port = 5005u,
+        .peer_ip = "127.0.0.1",
+        .peer_port = 5006u,
+        .max_unit_len = sizeof(cltu),
+        .thread_priority = 14,
+        .receive = udp_dispatch_profile,
+        .receive_user = &input,
+    };
+    zassert_ok(ccsds_udp_init(&udp, &udp_config));
 
-    ccsds_udp_get_stats(&stats_before);
-    zassert_ok(ccsds_udp_dispatch_datagram(&input, cltu, cltu_len));
-    ccsds_udp_get_stats(&stats_after);
+    ccsds_udp_get_stats(&udp, &stats_before);
+    zassert_ok(ccsds_udp_dispatch_datagram(&udp, cltu, cltu_len));
+    ccsds_udp_get_stats(&udp, &stats_after);
 
     zassert_false(profile.vc_state.lockout_flag);
     zassert_equal(stats_after.datagrams_received,
@@ -393,7 +411,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_accepts_set_vr_control_frame)
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
     struct ccsds_profile_tc_rx_stats stats;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(set_vr_cltu_hex, cltu, sizeof(cltu),
@@ -420,7 +438,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_rejects_set_vr_during_lockout)
         "eb90307b00090082002a1fa63455555555a2c5c5c5c5c5c5c579";
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(set_vr_cltu_hex, cltu, sizeof(cltu),
@@ -442,7 +460,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_advances_expected_fsn)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(short_data_cltu_hex, cltu, sizeof(cltu),
@@ -462,7 +480,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_advances_farm_b_after_scid_vc_accept)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(short_data_cltu_hex, cltu, sizeof(cltu),
@@ -481,10 +499,10 @@ ZTEST(ccsds_profile, test_tc_dispatch_does_not_advance_farm_b_on_cltu_reject)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
-    build_empty_segment_cltu(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 0u, 0u, cltu,
+    build_empty_segment_cltu(CONFIG_CCSDS_SPACECRAFT_ID, 0u, 0u, cltu,
                              sizeof(cltu), &cltu_len);
     cltu[0] = 0x00u;
 
@@ -501,9 +519,9 @@ ZTEST(ccsds_profile, test_tc_dispatch_does_not_advance_farm_b_on_wrong_scid)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
-    uint16_t wrong_scid = (CONFIG_AKIRA_CCSDS_SPACECRAFT_ID + 1u) & 0x03ffu;
+    uint16_t wrong_scid = (CONFIG_CCSDS_SPACECRAFT_ID + 1u) & 0x03ffu;
 
     build_empty_segment_cltu(wrong_scid, 0u, 0u, cltu, sizeof(cltu),
                              &cltu_len);
@@ -520,10 +538,10 @@ ZTEST(ccsds_profile, test_tc_dispatch_does_not_advance_farm_b_on_wrong_vc)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
-    build_empty_segment_cltu(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 1u, 0u, cltu,
+    build_empty_segment_cltu(CONFIG_CCSDS_SPACECRAFT_ID, 1u, 0u, cltu,
                              sizeof(cltu), &cltu_len);
     ccsds_router_init(&router);
     ccsds_profile_tc_rx_init(&profile, &router);
@@ -547,7 +565,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_reassembles_segmented_packet)
     struct packet_capture capture = {0};
     uint8_t packet[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN +
                    TEST_PACKET_PAYLOAD_LEN];
-    uint8_t cltu[3][CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[3][CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len[3] = {0};
 
     build_tc_packet(packet, TEST_PACKET_PAYLOAD_LEN, TEST_APID, 0x40u);
@@ -596,7 +614,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_rejects_data_frame_during_lockout)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(short_data_cltu_hex, cltu, sizeof(cltu),
@@ -618,7 +636,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_requests_retransmit_on_fsn_jump)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(short_data_cltu_hex, cltu, sizeof(cltu),
@@ -641,7 +659,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_discards_prior_fsn_without_retransmit)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(short_data_cltu_hex, cltu, sizeof(cltu),
@@ -664,7 +682,7 @@ ZTEST(ccsds_profile, test_tc_dispatch_locks_out_on_fsn_window_boundary)
 {
     struct ccsds_router router;
     struct ccsds_profile_tc_rx profile;
-    uint8_t cltu[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
     size_t cltu_len = 0u;
 
     zassert_ok(decode_hex_fixture(short_data_cltu_hex, cltu, sizeof(cltu),

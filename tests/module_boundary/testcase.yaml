@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  ccsds.module_boundary:
+    tags:
+      - ccsds
+      - module
+    platform_allow:
+      - native_sim
+    harness: ztest

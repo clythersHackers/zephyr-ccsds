@@ -6,7 +6,7 @@
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/util.h>
 
-LOG_MODULE_REGISTER(ccsds_cltu, CONFIG_AKIRA_LOG_LEVEL);
+LOG_MODULE_REGISTER(ccsds_cltu, CONFIG_LOG_DEFAULT_LEVEL);
 
 static const uint8_t cltu_tail_sequence[CCSDS_BCH_BLOCK_SIZE] = {
     0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0xc5, 0x79,
@@ -83,7 +83,7 @@ int ccsds_cltu_decode_message(const uint8_t *cltu, size_t cltu_len,
         return -EINVAL;
     }
 
-    if (cltu_len > CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN) {
+    if (cltu_len > CONFIG_CCSDS_MAX_CLTU_LEN) {
         LOG_WRN("CLTU too long: %zu bytes", cltu_len);
         return -EINVAL;
     }

@@ -41,7 +41,7 @@ ZTEST(ccsds_tc_frame, test_decode_rejects_nonzero_version)
     struct ccsds_tc_frame frame;
 
     build_tc_frame(frame_bytes, sizeof(frame_bytes),
-                   CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 0u, false, false, 0u);
+                   CONFIG_CCSDS_SPACECRAFT_ID, 0u, false, false, 0u);
     frame_bytes[0] |= BIT(6);
 
     zassert_equal(ccsds_tc_frame_decode(frame_bytes, sizeof(frame_bytes),
@@ -55,7 +55,7 @@ ZTEST(ccsds_tc_frame, test_decode_rejects_length_mismatch)
     struct ccsds_tc_frame frame;
 
     build_tc_frame(frame_bytes, sizeof(frame_bytes),
-                   CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 0u, false, false, 0u);
+                   CONFIG_CCSDS_SPACECRAFT_ID, 0u, false, false, 0u);
     frame_bytes[3]--;
 
     zassert_equal(ccsds_tc_frame_decode(frame_bytes, sizeof(frame_bytes),
@@ -69,7 +69,7 @@ ZTEST(ccsds_tc_frame, test_decode_accepts_cltu_fill_after_frame)
     struct ccsds_tc_frame frame;
 
     build_tc_frame(frame_bytes, TEST_TC_HDR_LEN + 3u,
-                   CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 2u, false, false,
+                   CONFIG_CCSDS_SPACECRAFT_ID, 2u, false, false,
                    0x24u);
     frame_bytes[5] = 0x11u;
     frame_bytes[6] = 0x22u;
@@ -89,7 +89,7 @@ ZTEST(ccsds_tc_frame, test_decode_rejects_wrong_spacecraft_id)
 {
     uint8_t frame_bytes[TEST_TC_HDR_LEN];
     struct ccsds_tc_frame frame;
-    uint16_t wrong_scid = (CONFIG_AKIRA_CCSDS_SPACECRAFT_ID + 1u) & 0x03ffu;
+    uint16_t wrong_scid = (CONFIG_CCSDS_SPACECRAFT_ID + 1u) & 0x03ffu;
 
     build_tc_frame(frame_bytes, sizeof(frame_bytes), wrong_scid, 0u, false,
                    false, 0u);
@@ -105,7 +105,7 @@ ZTEST(ccsds_tc_frame, test_decode_data_frame_fields)
     struct ccsds_tc_frame frame;
 
     build_tc_frame(frame_bytes, sizeof(frame_bytes),
-                   CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 17u, false, false,
+                   CONFIG_CCSDS_SPACECRAFT_ID, 17u, false, false,
                    0x42u);
     frame_bytes[5] = 0xaau;
     frame_bytes[6] = 0xbbu;
@@ -113,7 +113,7 @@ ZTEST(ccsds_tc_frame, test_decode_data_frame_fields)
 
     zassert_ok(ccsds_tc_frame_decode(frame_bytes, sizeof(frame_bytes),
                                      &frame));
-    zassert_equal(frame.spacecraft_id, CONFIG_AKIRA_CCSDS_SPACECRAFT_ID);
+    zassert_equal(frame.spacecraft_id, CONFIG_CCSDS_SPACECRAFT_ID);
     zassert_equal(frame.virtual_channel_id, 17u);
     zassert_false(frame.bypass);
     zassert_false(frame.control_command);
@@ -130,7 +130,7 @@ ZTEST(ccsds_tc_frame, test_decode_control_frame_fields)
     struct ccsds_tc_frame frame;
 
     build_tc_frame(frame_bytes, sizeof(frame_bytes),
-                   CONFIG_AKIRA_CCSDS_SPACECRAFT_ID, 63u, true, true, 0x7eu);
+                   CONFIG_CCSDS_SPACECRAFT_ID, 63u, true, true, 0x7eu);
     frame_bytes[5] = 0x01u;
     frame_bytes[6] = 0x02u;
 

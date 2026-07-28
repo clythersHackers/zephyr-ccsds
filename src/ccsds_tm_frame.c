@@ -9,11 +9,11 @@
 #include "ccsds_crc16.h"
 #include "ccsds_space_packet.h"
 
-#ifdef CONFIG_AKIRA_CCSDS_TM_RND
+#ifdef CONFIG_CCSDS_TM_RND
 #include "ccsds_rnd.h"
 #endif
 
-#ifdef CONFIG_AKIRA_CCSDS_RS
+#ifdef CONFIG_CCSDS_RS
 #include "ccsds_rs.h"
 #endif
 
@@ -38,37 +38,37 @@
 #define CCSDS_TM_ASM2 0xfcu
 #define CCSDS_TM_ASM3 0x1du
 
-#ifdef CONFIG_AKIRA_CCSDS_RS
+#ifdef CONFIG_CCSDS_RS
 #define CCSDS_TM_FRAME_LEN CCSDS_RS_INTERLEAVED_DATA_LEN
 #define CCSDS_TM_CODED_FRAME_LEN \
     (CCSDS_TM_ASM_LEN + CCSDS_TM_FRAME_LEN + CCSDS_RS_INTERLEAVED_PARITY_LEN)
 #else
-#define CCSDS_TM_FRAME_LEN CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN
+#define CCSDS_TM_FRAME_LEN CONFIG_CCSDS_MAX_FRAME_LEN
 #define CCSDS_TM_CODED_FRAME_LEN (CCSDS_TM_ASM_LEN + CCSDS_TM_FRAME_LEN)
 #endif
 
-#ifdef CONFIG_AKIRA_CCSDS_TM_FECF
+#ifdef CONFIG_CCSDS_TM_FECF
 #define CCSDS_TM_FECF_LEN CCSDS_CRC16_LEN
 #else
 #define CCSDS_TM_FECF_LEN 0u
 #endif
 
-BUILD_ASSERT(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID <= 0x3ff,
+BUILD_ASSERT(CONFIG_CCSDS_SPACECRAFT_ID <= 0x3ff,
              "CCSDS spacecraft ID must fit in 10 bits");
-BUILD_ASSERT(CCSDS_TM_FRAME_LEN <= CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN,
+BUILD_ASSERT(CCSDS_TM_FRAME_LEN <= CONFIG_CCSDS_MAX_FRAME_LEN,
              "configured TM frame workspace is smaller than generated frame");
 BUILD_ASSERT(CCSDS_TM_FRAME_LEN >
                  (CCSDS_TM_PRIMARY_HDR_LEN + CCSDS_TM_OCF_LEN +
                   CCSDS_TM_FECF_LEN),
              "configured TM frame length is too small for TM overhead");
-BUILD_ASSERT(CONFIG_AKIRA_CCSDS_TM_QUEUE_DEPTH >=
-                 CONFIG_AKIRA_CCSDS_TM_MAX_SPACE_PACKET_LEN,
+BUILD_ASSERT(CONFIG_CCSDS_TM_QUEUE_DEPTH >=
+                 CONFIG_CCSDS_TM_MAX_SPACE_PACKET_LEN,
              "TM queue depth must hold one maximum TM Space Packet");
 
 struct ccsds_tm_vc {
     struct k_mutex write_lock;
     struct k_pipe pending;
-    uint8_t pending_storage[CONFIG_AKIRA_CCSDS_TM_QUEUE_DEPTH];
+    uint8_t pending_storage[CONFIG_CCSDS_TM_QUEUE_DEPTH];
     size_t pending_len;
 
     size_t packet_rem;
@@ -91,7 +91,7 @@ struct ccsds_tm_clcw_provider {
 static struct ccsds_tm_vc vcs[CCSDS_TM_VC_COUNT];
 static struct ccsds_tm_route routes[CCSDS_TM_ROUTE_COUNT];
 static struct ccsds_tm_clcw_provider clcw_provider;
-static uint8_t frame_buf[CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN];
+static uint8_t frame_buf[CONFIG_CCSDS_MAX_FRAME_LEN];
 static uint8_t coded_frame_buf[CCSDS_TM_CODED_FRAME_LEN];
 static struct k_work_delayable generator_work;
 static struct k_mutex generator_lock;
@@ -153,7 +153,7 @@ static void build_primary_header(uint8_t *buf, uint8_t vcid,
     uint16_t word0;
     uint16_t word2;
 
-    word0 = ((uint16_t)(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID & 0x3ffu) << 4) |
+    word0 = ((uint16_t)(CONFIG_CCSDS_SPACECRAFT_ID & 0x3ffu) << 4) |
             ((uint16_t)(vcid & 0x7u) << 1) | 0x1u;
     word2 = ((uint16_t)(CCSDS_TM_SECONDARY_HEADER_FLAG & 0x1u) << 15) |
             ((uint16_t)(CCSDS_TM_SYNC_FLAG & 0x1u) << 14) |
@@ -170,7 +170,7 @@ static void build_primary_header(uint8_t *buf, uint8_t vcid,
 /* Append the optional TM FECF at the end of the transfer frame body. */
 static void append_fecf(void)
 {
-#ifdef CONFIG_AKIRA_CCSDS_TM_FECF
+#ifdef CONFIG_CCSDS_TM_FECF
     uint16_t fecf;
     size_t fecf_offset = CCSDS_TM_FRAME_LEN - CCSDS_TM_FECF_LEN;
 
@@ -366,7 +366,7 @@ static size_t code_transfer_frame(const uint8_t *frame, size_t frame_len)
     coded_frame_buf[3] = CCSDS_TM_ASM3;
     memcpy(&coded_frame_buf[CCSDS_TM_ASM_LEN], frame, frame_len);
 
-#ifdef CONFIG_AKIRA_CCSDS_RS
+#ifdef CONFIG_CCSDS_RS
     uint8_t *parity = &coded_frame_buf[CCSDS_TM_ASM_LEN + frame_len];
 
     __ASSERT_NO_MSG(frame_len == CCSDS_RS_INTERLEAVED_DATA_LEN);
@@ -377,7 +377,7 @@ static size_t code_transfer_frame(const uint8_t *frame, size_t frame_len)
     coded_len = CCSDS_TM_ASM_LEN + frame_len;
 #endif
 
-#ifdef CONFIG_AKIRA_CCSDS_TM_RND
+#ifdef CONFIG_CCSDS_TM_RND
     ccsds_rnd_apply(&coded_frame_buf[CCSDS_TM_ASM_LEN],
                     coded_len - CCSDS_TM_ASM_LEN);
 #endif
@@ -678,11 +678,11 @@ int ccsds_tm_frame_add(uint8_t vcid, const uint8_t *packet, size_t packet_len,
         return -EINVAL;
     }
 
-    if (packet_len > CONFIG_AKIRA_CCSDS_TM_MAX_SPACE_PACKET_LEN) {
+    if (packet_len > CONFIG_CCSDS_TM_MAX_SPACE_PACKET_LEN) {
         return -EMSGSIZE;
     }
 
-    if (packet_len > CONFIG_AKIRA_CCSDS_TM_QUEUE_DEPTH) {
+    if (packet_len > CONFIG_CCSDS_TM_QUEUE_DEPTH) {
         return -EMSGSIZE;
     }
 

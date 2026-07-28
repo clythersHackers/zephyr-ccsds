@@ -3,8 +3,8 @@
  * @brief Fixed-capacity received file range tracking for CFDP.
  */
 
-#ifndef AKIRA_CCSDS_CFDP_RANGES_H
-#define AKIRA_CCSDS_CFDP_RANGES_H
+#ifndef CCSDS_CFDP_RANGES_H
+#define CCSDS_CFDP_RANGES_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -87,4 +87,4 @@ ccsds_cfdp_ranges_missing(const ccsds_cfdp_ranges_t *state, uint32_t start,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CFDP_RANGES_H */
+#endif /* CCSDS_CFDP_RANGES_H */

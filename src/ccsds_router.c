@@ -23,7 +23,7 @@ int ccsds_router_register_apid(struct ccsds_router *router, uint16_t apid,
         return -EINVAL;
     }
 
-    for (size_t i = 0; i < CONFIG_AKIRA_CCSDS_ROUTER_MAX_APIDS; i++) {
+    for (size_t i = 0; i < CONFIG_CCSDS_ROUTER_MAX_APIDS; i++) {
         if (router->entries[i].active && router->entries[i].apid == apid) {
             router->entries[i].handler = handler;
             router->entries[i].user_data = user_data;
@@ -31,7 +31,7 @@ int ccsds_router_register_apid(struct ccsds_router *router, uint16_t apid,
         }
     }
 
-    for (size_t i = 0; i < CONFIG_AKIRA_CCSDS_ROUTER_MAX_APIDS; i++) {
+    for (size_t i = 0; i < CONFIG_CCSDS_ROUTER_MAX_APIDS; i++) {
         if (!router->entries[i].active) {
             router->entries[i].apid = apid;
             router->entries[i].handler = handler;
@@ -52,7 +52,7 @@ int ccsds_router_unregister_apid(struct ccsds_router *router, uint16_t apid)
         return -EINVAL;
     }
 
-    for (size_t i = 0; i < CONFIG_AKIRA_CCSDS_ROUTER_MAX_APIDS; i++) {
+    for (size_t i = 0; i < CONFIG_CCSDS_ROUTER_MAX_APIDS; i++) {
         if (router->entries[i].active && router->entries[i].apid == apid) {
             memset(&router->entries[i], 0, sizeof(router->entries[i]));
             return 0;
@@ -72,7 +72,7 @@ int ccsds_router_dispatch(struct ccsds_router *router,
         return -EINVAL;
     }
 
-    for (size_t i = 0; i < CONFIG_AKIRA_CCSDS_ROUTER_MAX_APIDS; i++) {
+    for (size_t i = 0; i < CONFIG_CCSDS_ROUTER_MAX_APIDS; i++) {
         struct ccsds_router_entry *entry = &router->entries[i];
 
         if (entry->active && entry->apid == packet->apid) {

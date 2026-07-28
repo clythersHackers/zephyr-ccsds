@@ -3,12 +3,12 @@
  * @brief Optional CCSDS layer-composition helpers.
  */
 
-#ifndef AKIRA_CCSDS_PROFILE_H
-#define AKIRA_CCSDS_PROFILE_H
+#ifndef CCSDS_PROFILE_H
+#define CCSDS_PROFILE_H
 
 #include "ccsds_router.h"
 
-#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#ifdef CONFIG_CCSDS_FRAME_SUPPORT
 #include "ccsds_cltu.h"
 #include "ccsds_tc_frame.h"
 #endif
@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#ifdef CONFIG_CCSDS_FRAME_SUPPORT
 struct ccsds_profile_tc_vc_state {
     bool no_rf_available_flag;
     bool no_bit_lock_flag;
@@ -34,7 +34,7 @@ struct ccsds_profile_tc_reassembly {
     uint8_t map_id;
     size_t len;
     size_t expected_len;
-    uint8_t buffer[CONFIG_AKIRA_CCSDS_TC_MAX_SPACE_PACKET_LEN];
+    uint8_t buffer[CONFIG_CCSDS_TC_MAX_SPACE_PACKET_LEN];
 };
 
 struct ccsds_profile_tc_rx {
@@ -42,7 +42,7 @@ struct ccsds_profile_tc_rx {
     uint8_t accepted_vcid;
     struct ccsds_profile_tc_vc_state vc_state;
     struct ccsds_profile_tc_reassembly reassembly;
-    uint8_t frame_buf[CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN];
+    uint8_t frame_buf[CONFIG_CCSDS_MAX_FRAME_LEN];
 };
 
 struct ccsds_profile_tc_rx_stats {
@@ -88,8 +88,8 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 /**
  * @brief Configure the single TC virtual channel accepted by this profile.
  *
- * AkiraOS currently models one spacecraft-side TC receive endpoint. Frames
- * for other TC VCs are rejected, and the CLCW reports this configured VC.
+ * The profile models one spacecraft-side TC receive endpoint. Frames for
+ * other TC VCs are rejected, and the CLCW reports this configured VC.
  *
  * @param profile Generic TC receive profile.
  * @param tc_vcid TC virtual channel ID, 0 through 63.
@@ -131,11 +131,11 @@ int ccsds_profile_tc_build_clcw(const struct ccsds_profile_tc_rx *profile,
  * @return 0 on success, or -EINVAL for an invalid configured TC VCID.
  */
 int ccsds_profile_tc_clcw_provider(uint32_t *clcw, void *user_data);
-#endif /* CONFIG_AKIRA_CCSDS_FRAME_SUPPORT */
+#endif /* CONFIG_CCSDS_FRAME_SUPPORT */
 
 struct ccsds_profile_input {
     struct ccsds_router *router;
-#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#ifdef CONFIG_CCSDS_FRAME_SUPPORT
     struct ccsds_profile_tc_rx *tc_rx;
 #endif
 };
@@ -154,7 +154,7 @@ struct ccsds_profile_input {
  */
 void ccsds_profile_input_init(struct ccsds_profile_input *input,
                               struct ccsds_router *router,
-#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#ifdef CONFIG_CCSDS_FRAME_SUPPORT
                               struct ccsds_profile_tc_rx *tc_rx
 #else
                               void *tc_rx
@@ -189,4 +189,4 @@ int ccsds_profile_packet_dispatch(struct ccsds_router *router,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_PROFILE_H */
+#endif /* CCSDS_PROFILE_H */

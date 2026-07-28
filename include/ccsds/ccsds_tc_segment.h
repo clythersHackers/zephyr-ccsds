@@ -3,8 +3,8 @@
  * @brief CCSDS TC segment-header receive helpers.
  */
 
-#ifndef AKIRA_CCSDS_TC_SEGMENT_H
-#define AKIRA_CCSDS_TC_SEGMENT_H
+#ifndef CCSDS_TC_SEGMENT_H
+#define CCSDS_TC_SEGMENT_H
 
 #include "ccsds_tc_frame.h"
 
@@ -88,4 +88,4 @@ int ccsds_tc_segment_walk_parts(
 }
 #endif
 
-#endif /* AKIRA_CCSDS_TC_SEGMENT_H */
+#endif /* CCSDS_TC_SEGMENT_H */

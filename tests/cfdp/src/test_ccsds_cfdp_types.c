@@ -6,19 +6,19 @@ ZTEST(ccsds_cfdp_types, test_config_backed_limits)
 {
     zassert_equal(CCSDS_CFDP_VERSION_1, 1u);
     zassert_equal(CCSDS_CFDP_MAX_ENTITY_ID_LEN,
-                  CONFIG_AKIRA_CCSDS_CFDP_MAX_ENTITY_ID_LEN);
+                  CONFIG_CCSDS_CFDP_MAX_ENTITY_ID_LEN);
     zassert_equal(CCSDS_CFDP_MAX_TRANS_SEQ_LEN,
-                  CONFIG_AKIRA_CCSDS_CFDP_MAX_TRANS_SEQ_LEN);
+                  CONFIG_CCSDS_CFDP_MAX_TRANS_SEQ_LEN);
     zassert_equal(CCSDS_CFDP_MAX_FILENAME_LEN,
-                  CONFIG_AKIRA_CCSDS_CFDP_MAX_FILENAME_LEN);
+                  CONFIG_CCSDS_CFDP_MAX_FILENAME_LEN);
     zassert_equal(CCSDS_CFDP_MAX_PDU_SIZE,
-                  CONFIG_AKIRA_CCSDS_CFDP_MAX_PDU_SIZE);
+                  CONFIG_CCSDS_CFDP_MAX_PDU_SIZE);
     zassert_equal(CCSDS_CFDP_MAX_SEGMENT_SIZE,
-                  CONFIG_AKIRA_CCSDS_CFDP_MAX_SEGMENT_SIZE);
+                  CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE);
     zassert_equal(CCSDS_CFDP_MAX_NAK_RANGES,
-                  CONFIG_AKIRA_CCSDS_CFDP_MAX_NAK_RANGES);
+                  CONFIG_CCSDS_CFDP_MAX_NAK_RANGES);
     zassert_equal(CCSDS_CFDP_MAX_NAK_ROUNDS,
-                  CONFIG_AKIRA_CCSDS_CFDP_MAX_NAK_ROUNDS);
+                  CONFIG_CCSDS_CFDP_MAX_NAK_ROUNDS);
     zassert_equal(CCSDS_CFDP_MAX_ACTIVE_TX, 1u);
     zassert_equal(CCSDS_CFDP_MAX_ACTIVE_RX, 1u);
 }

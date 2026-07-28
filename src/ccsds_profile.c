@@ -2,7 +2,7 @@
 
 #include <zephyr/sys/__assert.h>
 
-#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#ifdef CONFIG_CCSDS_FRAME_SUPPORT
 #include <errno.h>
 #include <string.h>
 
@@ -10,12 +10,12 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 
-#ifdef CONFIG_AKIRA_CCSDS_TC_RND
+#ifdef CONFIG_CCSDS_TC_RND
 #include "ccsds_rnd.h"
 #endif
 #include "ccsds_tc_segment.h"
 
-LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
+LOG_MODULE_REGISTER(ccsds_profile);
 
 #define CCSDS_TC_CONTROL_UNLOCK 0x00u
 #define CCSDS_TC_CONTROL_SET_VR 0x82u
@@ -26,11 +26,11 @@ LOG_MODULE_REGISTER(ccsds_profile, CONFIG_AKIRA_LOG_LEVEL);
 #define CCSDS_CLCW_STATUS_FIELD 0u
 #define CCSDS_CLCW_COP_IN_EFFECT 1u
 #define CCSDS_TC_FSN_MODULO 256u
-#define CCSDS_TC_COP1_HALF_WINDOW (CONFIG_AKIRA_CCSDS_COP1_WINDOW_SIZE / 2u)
+#define CCSDS_TC_COP1_HALF_WINDOW (CONFIG_CCSDS_COP1_WINDOW_SIZE / 2u)
 
-BUILD_ASSERT(CONFIG_AKIRA_CCSDS_COP1_WINDOW_SIZE >= 4,
+BUILD_ASSERT(CONFIG_CCSDS_COP1_WINDOW_SIZE >= 4,
              "COP-1 window size must leave a non-empty positive/negative window");
-BUILD_ASSERT(CONFIG_AKIRA_CCSDS_COP1_WINDOW_SIZE <= CCSDS_TC_FSN_MODULO / 2u,
+BUILD_ASSERT(CONFIG_CCSDS_COP1_WINDOW_SIZE <= CCSDS_TC_FSN_MODULO / 2u,
              "COP-1 window size must fit inside the 8-bit FSN half range");
 
 static K_MUTEX_DEFINE(tc_rx_stats_lock);
@@ -385,7 +385,7 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
     __ASSERT(profile->router != NULL, "TC profile router is NULL");
     __ASSERT(cltu != NULL, "TC CLTU input is NULL");
 
-    if (cltu_len > CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN) {
+    if (cltu_len > CONFIG_CCSDS_MAX_CLTU_LEN) {
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_OVERSIZE,
                             -EMSGSIZE);
         record_tc_result(&result, cltu_len, -EMSGSIZE);
@@ -401,7 +401,7 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
         return ret;
     }
 
-#ifdef CONFIG_AKIRA_CCSDS_TC_RND
+#ifdef CONFIG_CCSDS_TC_RND
     ccsds_rnd_apply(profile->frame_buf, tc_frame_len);
 #endif
 
@@ -492,7 +492,7 @@ void ccsds_profile_tc_rx_reset_stats(void)
     memset(&tc_rx_stats, 0, sizeof(tc_rx_stats));
     k_mutex_unlock(&tc_rx_stats_lock);
 }
-#endif /* CONFIG_AKIRA_CCSDS_FRAME_SUPPORT */
+#endif /* CONFIG_CCSDS_FRAME_SUPPORT */
 
 int ccsds_profile_packet_dispatch(struct ccsds_router *router,
                                   const uint8_t *packet, size_t packet_len)
@@ -502,7 +502,7 @@ int ccsds_profile_packet_dispatch(struct ccsds_router *router,
 
 void ccsds_profile_input_init(struct ccsds_profile_input *input,
                               struct ccsds_router *router,
-#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#ifdef CONFIG_CCSDS_FRAME_SUPPORT
                               struct ccsds_profile_tc_rx *tc_rx
 #else
                               void *tc_rx
@@ -514,7 +514,7 @@ void ccsds_profile_input_init(struct ccsds_profile_input *input,
 
     input->router = router;
 
-#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#ifdef CONFIG_CCSDS_FRAME_SUPPORT
     __ASSERT(tc_rx != NULL, "CCSDS input TC profile is NULL");
     input->tc_rx = tc_rx;
 #else
@@ -529,7 +529,7 @@ int ccsds_profile_input_dispatch_unit(struct ccsds_profile_input *input,
     __ASSERT(input->router != NULL, "CCSDS input router is NULL");
     __ASSERT(unit != NULL, "CCSDS input unit is NULL");
 
-#ifdef CONFIG_AKIRA_CCSDS_FRAME_SUPPORT
+#ifdef CONFIG_CCSDS_FRAME_SUPPORT
     __ASSERT(input->tc_rx != NULL, "CCSDS input TC profile is NULL");
 
     return ccsds_profile_tc_cltu_dispatch(input->tc_rx, unit, unit_len);

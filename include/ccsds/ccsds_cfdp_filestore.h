@@ -1,10 +1,10 @@
 /**
  * @file ccsds_cfdp_filestore.h
- * @brief Thin CFDP filestore callback boundary for AkiraOS.
+ * @brief Thin CFDP filestore callback boundary.
  */
 
-#ifndef AKIRA_CCSDS_CFDP_FILESTORE_H
-#define AKIRA_CCSDS_CFDP_FILESTORE_H
+#ifndef CCSDS_CFDP_FILESTORE_H
+#define CCSDS_CFDP_FILESTORE_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,4 +33,4 @@ typedef struct ccsds_cfdp_filestore_ops ccsds_cfdp_filestore_ops_t;
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CFDP_FILESTORE_H */
+#endif /* CCSDS_CFDP_FILESTORE_H */

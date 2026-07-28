@@ -3,8 +3,8 @@
  * @brief CCSDS TC transfer frame boundary.
  */
 
-#ifndef AKIRA_CCSDS_TC_FRAME_H
-#define AKIRA_CCSDS_TC_FRAME_H
+#ifndef CCSDS_TC_FRAME_H
+#define CCSDS_TC_FRAME_H
 
 #include "ccsds_space_packet.h"
 
@@ -57,4 +57,4 @@ int ccsds_tc_frame_extract_packet(const struct ccsds_tc_frame *frame,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_TC_FRAME_H */
+#endif /* CCSDS_TC_FRAME_H */

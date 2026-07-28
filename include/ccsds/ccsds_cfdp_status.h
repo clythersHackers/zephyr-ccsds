@@ -1,10 +1,10 @@
 /**
  * @file ccsds_cfdp_status.h
- * @brief CCSDS CFDP status codes for the planned AkiraOS subset.
+ * @brief CCSDS CFDP status codes.
  */
 
-#ifndef AKIRA_CCSDS_CFDP_STATUS_H
-#define AKIRA_CCSDS_CFDP_STATUS_H
+#ifndef CCSDS_CFDP_STATUS_H
+#define CCSDS_CFDP_STATUS_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,4 +31,4 @@ enum ccsds_cfdp_status {
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CFDP_STATUS_H */
+#endif /* CCSDS_CFDP_STATUS_H */

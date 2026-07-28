@@ -3,8 +3,8 @@
  * @brief CCSDS Space Packet encode/decode boundary.
  */
 
-#ifndef AKIRA_CCSDS_SPACE_PACKET_H
-#define AKIRA_CCSDS_SPACE_PACKET_H
+#ifndef CCSDS_SPACE_PACKET_H
+#define CCSDS_SPACE_PACKET_H
 
 #include "ccsds_types.h"
 
@@ -63,4 +63,4 @@ int ccsds_space_packet_encode(const struct ccsds_space_packet *packet,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_SPACE_PACKET_H */
+#endif /* CCSDS_SPACE_PACKET_H */

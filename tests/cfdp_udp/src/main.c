@@ -10,7 +10,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 
-#include "akira_cfdp_service.h"
+#include "ccsds_cfdp_service.h"
 #include "ccsds_cfdp_pdu.h"
 #include "ccsds_profile.h"
 #include "ccsds_router.h"
@@ -38,6 +38,22 @@ static uint32_t dropped_offset;
 static uint32_t nak_sent_count;
 static uint32_t nak_received_count;
 static uint32_t retransmit_count;
+static struct ccsds_udp udp;
+static struct ccsds_cfdp_service service;
+
+struct cfdp_udp_status {
+    bool valid;
+    ccsds_cfdp_event_type_t event_type;
+    enum ccsds_cfdp_status status;
+    ccsds_cfdp_transaction_id_t transaction_id;
+    char source_path[CCSDS_CFDP_MAX_FILENAME_LEN + 1u];
+    char destination_path[CCSDS_CFDP_MAX_FILENAME_LEN + 1u];
+    uint32_t file_size;
+    uint32_t checksum;
+    bool checksum_ok;
+};
+
+static struct cfdp_udp_status service_status;
 
 static uint64_t cfdp_udp_now_ms(void *user)
 {
@@ -237,11 +253,10 @@ static bool packet_is_nak(const uint8_t *unit, size_t unit_len)
 
 static int test_send_packet(void *user, const uint8_t *unit, size_t unit_len)
 {
-    uint8_t corrupted[CONFIG_AKIRA_CCSDS_UDP_MAX_UNIT_LEN];
+    uint8_t corrupted[CONFIG_CCSDS_UDP_MAX_UNIT_LEN];
     uint32_t filedata_offset = 0u;
     bool filedata = packet_filedata_offset(unit, unit_len, &filedata_offset);
 
-    ARG_UNUSED(user);
     if (packet_is_nak(unit, unit_len)) {
         nak_sent_count++;
         printk("CFDP_UDP EVENT NAK_SENT\n");
@@ -270,16 +285,35 @@ static int test_send_packet(void *user, const uint8_t *unit, size_t unit_len)
         corrupted[unit_len - 1u] ^= 0x5au;
         injection_done = true;
         printk("CFDP_UDP INJECT corrupted-file-data\n");
-        return ccsds_udp_send(NULL, corrupted, unit_len);
+        return ccsds_udp_send(user, corrupted, unit_len);
     }
-    return ccsds_udp_send(NULL, unit, unit_len);
+    return ccsds_udp_send(user, unit, unit_len);
 }
 
 static void service_event(void *user, const ccsds_cfdp_event_t *event)
 {
     ARG_UNUSED(user);
 
-    if (event->type == CCSDS_CFDP_EVENT_NAK_SENT) {
+    if (event->type == CCSDS_CFDP_EVENT_COMPLETE ||
+        event->type == CCSDS_CFDP_EVENT_FAILED) {
+        const ccsds_cfdp_transaction_slot_t *slot =
+            service.entity.sender.active ? &service.entity.sender
+                                         : &service.entity.receiver;
+
+        memset(&service_status, 0, sizeof(service_status));
+        service_status.valid = true;
+        service_status.event_type = event->type;
+        service_status.status = event->status;
+        service_status.transaction_id = event->transaction_id;
+        memcpy(service_status.source_path, slot->source_path,
+               sizeof(service_status.source_path));
+        memcpy(service_status.destination_path, slot->destination_path,
+               sizeof(service_status.destination_path));
+        service_status.file_size = slot->file_size;
+        service_status.checksum = slot->eof_checksum;
+        service_status.checksum_ok =
+            event->status == CCSDS_CFDP_STATUS_OK;
+    } else if (event->type == CCSDS_CFDP_EVENT_NAK_SENT) {
         nak_sent_count++;
         printk("CFDP_UDP EVENT NAK_SENT transaction=%llu:%llu\n",
                (unsigned long long)event->transaction_id.source_entity_id,
@@ -295,6 +329,20 @@ static void service_event(void *user, const ccsds_cfdp_event_t *event)
                (unsigned long long)event->transaction_id.source_entity_id,
                (unsigned long long)event->transaction_id.transaction_sequence_number);
     }
+}
+
+static int dispatch_input(void *user, const uint8_t *unit, size_t unit_len)
+{
+    return ccsds_profile_input_dispatch_unit(user, unit, unit_len);
+}
+
+static const char *status_name(enum ccsds_cfdp_status status)
+{
+    return status == CCSDS_CFDP_STATUS_OK
+               ? "OK"
+               : status == CCSDS_CFDP_STATUS_CHECKSUM_FAILURE
+                     ? "CHECKSUM_FAILURE"
+                     : "FAILED";
 }
 
 static int env_u32(const char *name, uint32_t *value)
@@ -316,10 +364,11 @@ static int env_u32(const char *name, uint32_t *value)
 
 int main(void)
 {
-    akira_cfdp_service_config_t config;
+    struct ccsds_cfdp_service_config config;
+    struct ccsds_udp_config udp_config;
     struct ccsds_router router;
     struct ccsds_profile_input input;
-    struct akira_cfdp_service_status last = {0};
+    struct cfdp_udp_status last = {0};
     uint32_t local;
     uint32_t remote;
     uint32_t apid;
@@ -340,35 +389,54 @@ int main(void)
         return 1;
     }
 
-    akira_cfdp_service_config_defaults(&config);
-    config.local_entity_id = local;
-    config.remote_entity_id = remote;
-    config.entity_id_len = 1u;
-    config.local_apid = (uint16_t)apid;
-    config.remote_apid = (uint16_t)apid;
-    config.send_packet = test_send_packet;
-    config.now_ms = cfdp_udp_now_ms;
-    config.receive_filestore = &receive_ops;
-    config.event_cb = service_event;
-
     ccsds_router_init(&router);
-    if (akira_cfdp_service_init(&config) != CCSDS_CFDP_STATUS_OK ||
-        akira_cfdp_service_register_rx(&router) != 0) {
+    ccsds_profile_input_init(&input, &router, NULL);
+    udp_config = (struct ccsds_udp_config){
+        .local_ip = CONFIG_CFDP_UDP_LOCAL_IP,
+        .local_port = CONFIG_CFDP_UDP_LOCAL_PORT,
+        .peer_ip = CONFIG_CFDP_UDP_PEER_IP,
+        .peer_port = CONFIG_CFDP_UDP_PEER_PORT,
+        .max_unit_len = CONFIG_CCSDS_UDP_MAX_UNIT_LEN,
+        .thread_priority = 14,
+        .thread_name = "cfdp_udp",
+        .receive = dispatch_input,
+        .receive_user = &input,
+    };
+    if (ccsds_udp_init(&udp, &udp_config) != 0) {
+        printk("CFDP_UDP FATAL UDP initialization failed\n");
+        return 1;
+    }
+    config = (struct ccsds_cfdp_service_config){
+        .local_entity_id = local,
+        .remote_entity_id = remote,
+        .entity_id_len = 1u,
+        .transaction_sequence_number_len = 1u,
+        .initial_transaction_sequence_number = 1u,
+        .local_apid = (uint16_t)apid,
+        .remote_apid = (uint16_t)apid,
+        .packet_type = CCSDS_PACKET_TYPE_TC,
+        .send_packet = test_send_packet,
+        .send_user = &udp,
+        .now_ms = cfdp_udp_now_ms,
+        .receive_filestore = &receive_ops,
+        .event_cb = service_event,
+    };
+    if (ccsds_cfdp_service_init(&service, &config) !=
+            CCSDS_CFDP_STATUS_OK ||
+        ccsds_cfdp_service_register_rx(&service, &router) != 0) {
         printk("CFDP_UDP FATAL service initialization failed\n");
         return 1;
     }
-    ccsds_profile_input_init(&input, &router, NULL);
-    rc = ccsds_udp_start(&input);
+    rc = ccsds_udp_start(&udp);
     if (rc != 0) {
         printk("CFDP_UDP FATAL UDP start failed rc=%d\n", rc);
         return 1;
     }
 
     printk("CFDP_UDP READY local=%u remote=%u apid=0x%03x udp=%s:%u peer=%s:%u\n",
-           local, remote, apid, CONFIG_AKIRA_CCSDS_UDP_LOCAL_IP,
-           CONFIG_AKIRA_CCSDS_UDP_LOCAL_PORT,
-           CONFIG_AKIRA_CCSDS_UDP_PEER_IP,
-           CONFIG_AKIRA_CCSDS_UDP_PEER_PORT);
+           local, remote, apid, CONFIG_CFDP_UDP_LOCAL_IP,
+           CONFIG_CFDP_UDP_LOCAL_PORT, CONFIG_CFDP_UDP_PEER_IP,
+           CONFIG_CFDP_UDP_PEER_PORT);
 
     if (source_path != NULL) {
         ccsds_cfdp_transaction_id_t id;
@@ -393,7 +461,8 @@ int main(void)
             .closure_requested = mode == NULL || strcmp(mode, "unack") != 0,
             .acknowledged_mode = mode == NULL || strcmp(mode, "unack") != 0,
         };
-        rc = akira_cfdp_service_send_file(&source_ops, &request, &id);
+        rc = ccsds_cfdp_service_send_file(&service, &source_ops, &request,
+                                          &id);
         printk("CFDP_UDP PUT transaction=%llu:%llu size=%u mode=%s rc=%d\n",
                (unsigned long long)id.source_entity_id,
                (unsigned long long)id.transaction_sequence_number,
@@ -402,11 +471,11 @@ int main(void)
     }
 
     while (true) {
-        struct akira_cfdp_service_status status;
+        struct cfdp_udp_status status;
         uint64_t now = (uint64_t)k_uptime_get();
 
-        akira_cfdp_service_poll(now);
-        akira_cfdp_service_get_status(&status);
+        ccsds_cfdp_service_poll(&service, now);
+        status = service_status;
         if (status.valid &&
             (!last.valid || status.event_type != last.event_type ||
              status.transaction_id.transaction_sequence_number !=
@@ -418,7 +487,7 @@ int main(void)
                    status.source_path, status.destination_path, status.file_size,
                    status.checksum, status.checksum_ok ? "OK" : "NOK",
                    status.event_type == CCSDS_CFDP_EVENT_COMPLETE ? "COMPLETE" : "FAILED",
-                   akira_cfdp_service_status_name(status.status), nak_sent_count,
+                   status_name(status.status), nak_sent_count,
                    nak_received_count, retransmit_count);
             last = status;
             next_report_ms = now + 1000u;

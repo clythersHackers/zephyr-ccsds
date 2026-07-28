@@ -1,20 +1,35 @@
 /**
  * @file ccsds_udp.h
- * @brief UDP transport for bounded CCSDS input and output units.
+ * @brief Instance-based UDP adapter for bounded protocol units.
  */
 
-#ifndef AKIRA_CCSDS_UDP_H
-#define AKIRA_CCSDS_UDP_H
-
-#include "ccsds_profile.h"
+#ifndef CCSDS_UDP_H
+#define CCSDS_UDP_H
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include <zephyr/kernel.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef int (*ccsds_udp_receive_cb_t)(void *user, const uint8_t *unit,
+                                     size_t unit_len);
+
+struct ccsds_udp_config {
+    const char *local_ip;
+    uint16_t local_port;
+    const char *peer_ip;
+    uint16_t peer_port;
+    size_t max_unit_len;
+    int thread_priority;
+    const char *thread_name;
+    ccsds_udp_receive_cb_t receive;
+    void *receive_user;
+};
 
 struct ccsds_udp_stats {
     bool running;
@@ -23,40 +38,43 @@ struct ccsds_udp_stats {
     int last_error;
 };
 
-/** Return whether the UDP transport is available in this build. */
+/**
+ * Caller-owned UDP adapter. Each instance owns its sockets, counters, receive
+ * workspace, thread, stack, and lock.
+ */
+struct ccsds_udp {
+    struct ccsds_udp_config config;
+    struct k_mutex lock;
+    struct k_thread thread;
+    K_KERNEL_STACK_MEMBER(thread_stack,
+                          CONFIG_CCSDS_UDP_THREAD_STACK_SIZE);
+    uint8_t unit_buf[CONFIG_CCSDS_UDP_MAX_UNIT_LEN + 1u];
+    struct ccsds_udp_stats stats;
+    int rx_fd;
+    int tx_fd;
+    bool thread_started;
+    bool initialized;
+};
+
 bool ccsds_udp_available(void);
 
-/**
- * Start receiving bounded CCSDS units from the configured local endpoint.
- *
- * Each UDP datagram is passed unchanged to the central CCSDS input profile.
- */
-int ccsds_udp_start(struct ccsds_profile_input *input);
+int ccsds_udp_init(struct ccsds_udp *udp,
+                   const struct ccsds_udp_config *config);
 
-/** Stop the UDP receive listener. */
-void ccsds_udp_stop(void);
+int ccsds_udp_start(struct ccsds_udp *udp);
 
-/**
- * Send one encoded, bounded CCSDS unit to the configured UDP peer.
- *
- * The callback shape is compatible with the CFDP Space Packet adapter.
- */
+void ccsds_udp_stop(struct ccsds_udp *udp);
+
 int ccsds_udp_send(void *user, const uint8_t *unit, size_t unit_len);
 
-/** Copy current UDP transport counters. */
-void ccsds_udp_get_stats(struct ccsds_udp_stats *stats);
+void ccsds_udp_get_stats(struct ccsds_udp *udp,
+                         struct ccsds_udp_stats *stats);
 
-/**
- * Pass one acquired datagram through the central input profile.
- *
- * This is exposed so non-socket acquisition tests can verify the transport
- * handoff without duplicating profile selection logic.
- */
-int ccsds_udp_dispatch_datagram(struct ccsds_profile_input *input,
-                                const uint8_t *unit, size_t unit_len);
+int ccsds_udp_dispatch_datagram(struct ccsds_udp *udp, const uint8_t *unit,
+                                size_t unit_len);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* AKIRA_CCSDS_UDP_H */
+#endif /* CCSDS_UDP_H */

@@ -1,10 +1,10 @@
 /**
  * @file ccsds_types.h
- * @brief Shared CCSDS protocol types for AkiraOS.
+ * @brief Shared CCSDS protocol types.
  */
 
-#ifndef AKIRA_CCSDS_TYPES_H
-#define AKIRA_CCSDS_TYPES_H
+#ifndef CCSDS_TYPES_H
+#define CCSDS_TYPES_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -14,16 +14,16 @@
 extern "C" {
 #endif
 
-#ifndef CONFIG_AKIRA_CCSDS_ROUTER_MAX_APIDS
-#define CONFIG_AKIRA_CCSDS_ROUTER_MAX_APIDS 8
+#ifndef CONFIG_CCSDS_ROUTER_MAX_APIDS
+#define CONFIG_CCSDS_ROUTER_MAX_APIDS 8
 #endif
 
-#ifndef CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN
-#define CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN 1024
+#ifndef CONFIG_CCSDS_MAX_CLTU_LEN
+#define CONFIG_CCSDS_MAX_CLTU_LEN 1024
 #endif
 
-#ifndef CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN
-#define CONFIG_AKIRA_CCSDS_MAX_FRAME_LEN 1024
+#ifndef CONFIG_CCSDS_MAX_FRAME_LEN
+#define CONFIG_CCSDS_MAX_FRAME_LEN 1024
 #endif
 
 #define CCSDS_APID_MAX 0x07ffu
@@ -56,4 +56,4 @@ struct ccsds_buffer {
 }
 #endif
 
-#endif /* AKIRA_CCSDS_TYPES_H */
+#endif /* CCSDS_TYPES_H */

@@ -19,9 +19,9 @@
 #define CCSDS_TC_CONTROL(byte0) (((byte0) & BIT(4)) != 0u)
 #define CCSDS_TC_RESERVED(byte0) (((byte0) >> 2) & CCSDS_TC_RESERVED_MASK)
 
-LOG_MODULE_REGISTER(ccsds_tc_frame, CONFIG_AKIRA_LOG_LEVEL);
+LOG_MODULE_REGISTER(ccsds_tc_frame, CONFIG_LOG_DEFAULT_LEVEL);
 
-BUILD_ASSERT(CONFIG_AKIRA_CCSDS_SPACECRAFT_ID <= CCSDS_TC_MAX_SCID,
+BUILD_ASSERT(CONFIG_CCSDS_SPACECRAFT_ID <= CCSDS_TC_MAX_SCID,
              "CCSDS spacecraft ID must fit in 10 bits");
 
 int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
@@ -67,9 +67,9 @@ int ccsds_tc_frame_decode(const uint8_t *buf, size_t len,
 
     uint16_t word0 = sys_get_be16(&buf[0]);
     uint16_t spacecraft_id = word0 & CCSDS_TC_MAX_SCID;
-    if (spacecraft_id != CONFIG_AKIRA_CCSDS_SPACECRAFT_ID) {
+    if (spacecraft_id != CONFIG_CCSDS_SPACECRAFT_ID) {
         LOG_WRN("TC frame wrong spacecraft id: scid=%u expected=%u",
-                spacecraft_id, CONFIG_AKIRA_CCSDS_SPACECRAFT_ID);
+                spacecraft_id, CONFIG_CCSDS_SPACECRAFT_ID);
         return -EACCES;
     }
 

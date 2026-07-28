@@ -1,10 +1,10 @@
 /**
  * @file ccsds_cfdp_types.h
- * @brief CCSDS CFDP constants and protocol enums for AkiraOS.
+ * @brief CCSDS CFDP constants and protocol enums.
  */
 
-#ifndef AKIRA_CCSDS_CFDP_TYPES_H
-#define AKIRA_CCSDS_CFDP_TYPES_H
+#ifndef CCSDS_CFDP_TYPES_H
+#define CCSDS_CFDP_TYPES_H
 
 #include "ccsds_cfdp_config.h"
 #include "ccsds_cfdp_status.h"
@@ -103,4 +103,4 @@ enum ccsds_cfdp_transaction_status {
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CFDP_TYPES_H */
+#endif /* CCSDS_CFDP_TYPES_H */

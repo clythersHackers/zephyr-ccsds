@@ -3,8 +3,8 @@
  * @brief Shared CCSDS CRC-16 primitive.
  */
 
-#ifndef AKIRA_CCSDS_CRC16_H
-#define AKIRA_CCSDS_CRC16_H
+#ifndef CCSDS_CRC16_H
+#define CCSDS_CRC16_H
 
 #include "ccsds_types.h"
 
@@ -58,4 +58,4 @@ bool ccsds_crc16_check(const uint8_t *data, size_t len);
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CRC16_H */
+#endif /* CCSDS_CRC16_H */

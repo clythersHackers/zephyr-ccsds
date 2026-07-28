@@ -3,8 +3,8 @@
  * @brief CCSDS CLTU acquisition and decode boundary.
  */
 
-#ifndef AKIRA_CCSDS_CLTU_H
-#define AKIRA_CCSDS_CLTU_H
+#ifndef CCSDS_CLTU_H
+#define CCSDS_CLTU_H
 
 #include "ccsds_bch.h"
 
@@ -34,7 +34,7 @@ struct ccsds_cltu_rx {
     void *user_data;
     size_t buffered_len;
     bool in_cltu;
-    uint8_t buffer[CONFIG_AKIRA_CCSDS_MAX_CLTU_LEN];
+    uint8_t buffer[CONFIG_CCSDS_MAX_CLTU_LEN];
 };
 
 /**
@@ -135,4 +135,4 @@ int ccsds_cltu_decode_message(const uint8_t *cltu, size_t cltu_len,
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CLTU_H */
+#endif /* CCSDS_CLTU_H */

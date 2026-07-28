@@ -1,0 +1,168 @@
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig CCSDS
+	bool "CCSDS protocol support"
+	default n
+	help
+	  Enable reusable Consultative Committee for Space Data Systems
+	  protocol support provided by the CCSDS Zephyr module.
+
+if CCSDS
+
+config CCSDS_ROUTER_MAX_APIDS
+	int "Maximum registered CCSDS APID handlers"
+	default 8
+	range 1 64
+
+config CCSDS_FRAME_SUPPORT
+	bool "Enable CCSDS frame and channel-coding support"
+	default y
+
+config CCSDS_MAX_CLTU_LEN
+	int "Maximum CCSDS CLTU length"
+	default 1024
+	range 64 65535
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_MAX_FRAME_LEN
+	int "Maximum CCSDS transfer frame length"
+	default 1115
+	range 32 65535
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_TC_MAX_SPACE_PACKET_LEN
+	int "Maximum CCSDS TC Space Packet length"
+	default 2048
+	range 7 65535
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_COP1_WINDOW_SIZE
+	int "CCSDS COP-1 acceptance window size"
+	default 128
+	range 4 128
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_SPACECRAFT_ID
+	int "CCSDS spacecraft ID"
+	default 123
+	range 0 1023
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_TM_MAX_SPACE_PACKET_LEN
+	int "Maximum CCSDS TM Space Packet length"
+	default 2048
+	range 7 65535
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_TM_QUEUE_DEPTH
+	int "CCSDS TM queue depth per VC"
+	default CCSDS_TM_MAX_SPACE_PACKET_LEN
+	range 7 65535
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_RS
+	bool "Enable CCSDS Reed-Solomon primitive"
+	default y
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_RS_INTERLEAVE_DEPTH
+	int "CCSDS Reed-Solomon interleave depth"
+	default 5
+	range 1 8
+	depends on CCSDS_RS
+
+config CCSDS_RND
+	bool "Enable CCSDS randomization primitive"
+	default n
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_TM_RND
+	bool "Apply CCSDS randomization to TM channel frames"
+	default n
+	depends on CCSDS_FRAME_SUPPORT
+	select CCSDS_RND
+
+config CCSDS_TC_RND
+	bool "Apply CCSDS derandomization to TC transfer frames"
+	default n
+	depends on CCSDS_FRAME_SUPPORT
+	select CCSDS_RND
+
+config CCSDS_TM_FECF
+	bool "Enable CCSDS TM Frame Error Control Field"
+	default n if CCSDS_RS
+	default y
+	depends on CCSDS_FRAME_SUPPORT
+
+config CCSDS_UDP
+	bool
+	default y
+
+if CCSDS_UDP
+
+config CCSDS_UDP_MAX_UNIT_LEN
+	int "Maximum CCSDS UDP bounded-unit length"
+	default CCSDS_MAX_CLTU_LEN if CCSDS_FRAME_SUPPORT
+	default 1024
+	range 7 65535
+	help
+	  Maximum datagram held by each caller-owned CCSDS UDP adapter instance.
+
+config CCSDS_UDP_THREAD_STACK_SIZE
+	int "CCSDS UDP adapter thread stack size"
+	default 2048
+	range 1024 8192
+	help
+	  Stack reserved inside each caller-owned CCSDS UDP adapter instance.
+
+endif # CCSDS_UDP
+
+config CCSDS_CFDP
+	bool "Enable CCSDS CFDP support"
+	default n
+	select CRC
+	help
+	  Enable the reusable CCSDS File Delivery Protocol core, including PDU
+	  codecs, checksums, missing-range tracking, entity state, and the Space
+	  Packet adapter.
+
+if CCSDS_CFDP
+
+config CCSDS_CFDP_MAX_ENTITY_ID_LEN
+	int "Maximum CFDP entity ID length"
+	default 4
+	range 1 8
+
+config CCSDS_CFDP_MAX_TRANS_SEQ_LEN
+	int "Maximum CFDP transaction sequence number length"
+	default 4
+	range 1 8
+
+config CCSDS_CFDP_MAX_FILENAME_LEN
+	int "Maximum CFDP file name length"
+	default 64
+	range 0 255
+
+config CCSDS_CFDP_MAX_PDU_SIZE
+	int "Maximum CFDP PDU size"
+	default 512
+	range 64 65535
+
+config CCSDS_CFDP_MAX_SEGMENT_SIZE
+	int "Maximum CFDP file data segment size"
+	default 384
+	range 1 65535
+
+config CCSDS_CFDP_MAX_NAK_RANGES
+	int "Maximum CFDP NAK ranges"
+	default 4
+	range 1 64
+
+config CCSDS_CFDP_MAX_NAK_ROUNDS
+	int "Maximum CFDP NAK rounds"
+	default 4
+	range 1 255
+
+endif # CCSDS_CFDP
+
+endif # CCSDS

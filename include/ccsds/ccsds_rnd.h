@@ -3,8 +3,8 @@
  * @brief Optional CCSDS randomization primitive.
  */
 
-#ifndef AKIRA_CCSDS_RND_H
-#define AKIRA_CCSDS_RND_H
+#ifndef CCSDS_RND_H
+#define CCSDS_RND_H
 
 #include "ccsds_types.h"
 
@@ -27,4 +27,4 @@ void ccsds_rnd_apply(uint8_t *data, size_t len);
 }
 #endif
 
-#endif /* AKIRA_CCSDS_RND_H */
+#endif /* CCSDS_RND_H */

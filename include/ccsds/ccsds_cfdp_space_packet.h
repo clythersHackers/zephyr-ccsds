@@ -3,8 +3,8 @@
  * @brief CCSDS Space Packet Unitdata Transfer adapter for CFDP.
  */
 
-#ifndef AKIRA_CCSDS_CFDP_SPACE_PACKET_H
-#define AKIRA_CCSDS_CFDP_SPACE_PACKET_H
+#ifndef CCSDS_CFDP_SPACE_PACKET_H
+#define CCSDS_CFDP_SPACE_PACKET_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -72,4 +72,4 @@ size_t ccsds_cfdp_space_packet_max_payload_len(
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CFDP_SPACE_PACKET_H */
+#endif /* CCSDS_CFDP_SPACE_PACKET_H */

@@ -1,10 +1,10 @@
 /**
  * @file ccsds_cfdp_entity.h
- * @brief Thin CFDP Unitdata Transfer callback boundary for AkiraOS.
+ * @brief Thin CFDP Unitdata Transfer callback boundary.
  */
 
-#ifndef AKIRA_CCSDS_CFDP_ENTITY_H
-#define AKIRA_CCSDS_CFDP_ENTITY_H
+#ifndef CCSDS_CFDP_ENTITY_H
+#define CCSDS_CFDP_ENTITY_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -170,4 +170,4 @@ void ccsds_cfdp_entity_release_receiver_transaction(ccsds_cfdp_entity_t *entity)
 }
 #endif
 
-#endif /* AKIRA_CCSDS_CFDP_ENTITY_H */
+#endif /* CCSDS_CFDP_ENTITY_H */

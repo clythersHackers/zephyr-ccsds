@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "CCSDS CFDP UDP integration"
+
+source "Kconfig.zephyr"
+
+config CFDP_UDP_LOCAL_IP
+	string "Integration peer local IPv4 address"
+	default "127.0.0.1"
+
+config CFDP_UDP_LOCAL_PORT
+	int "Integration peer local UDP port"
+	range 1 65535
+
+config CFDP_UDP_PEER_IP
+	string "Integration peer destination IPv4 address"
+	default "127.0.0.1"
+
+config CFDP_UDP_PEER_PORT
+	int "Integration peer destination UDP port"
+	range 1 65535
