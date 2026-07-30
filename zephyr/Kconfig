@@ -165,4 +165,36 @@ config CCSDS_CFDP_MAX_NAK_ROUNDS
 
 endif # CCSDS_CFDP
 
+config CCSDS_SDLS
+	bool "Enable CCSDS Space Data Link Security foundation"
+	default n
+	select MBEDTLS
+	select MBEDTLS_PSA_CRYPTO_C
+	select PSA_WANT_ALG_GCM
+	select PSA_WANT_KEY_TYPE_AES
+	help
+	  Enable the fixed-capacity SDLS state model and the PSA Crypto
+	  AES-256-GCM/GMAC provider requirements. This foundation does not
+	  process transfer frames or select algorithms at runtime.
+
+if CCSDS_SDLS
+
+config CCSDS_SDLS_MAX_SA
+	int "Maximum configured SDLS security associations"
+	default 4
+	range 1 255
+	help
+	  Number of Security Association state slots embedded in every SDLS
+	  context. Slots are populated only when the context is initialized.
+
+config CCSDS_SDLS_MAX_KEYS
+	int "Maximum configured SDLS keys"
+	default 8
+	range 1 255
+	help
+	  Number of opaque PSA key-reference slots embedded in every SDLS
+	  context. Operational key bytes are never stored in this table.
+
+endif # CCSDS_SDLS
+
 endif # CCSDS

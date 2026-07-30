@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+
+sample:
+  name: CCSDS SDLS PSA benchmark
+  description: Isolated AES-256-GCM and GMAC-style PSA benchmark
+common:
+  tags:
+    - ccsds
+    - sdls
+    - benchmark
+  platform_allow:
+    - esp32s3_devkitm/esp32s3/procpu
+  build_only: true
+tests:
+  sample.ccsds.sdls_benchmark.hardware:
+    extra_args:
+      - EXTRA_CONF_FILE=overlay-hw.conf
+  sample.ccsds.sdls_benchmark.software:
+    extra_args:
+      - EXTRA_CONF_FILE=overlay-sw.conf

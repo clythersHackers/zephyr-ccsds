@@ -48,4 +48,8 @@ if(CONFIG_CCSDS)
       ../src/ccsds_cfdp_space_packet.c
     )
   endif()
+
+  if(CONFIG_CCSDS_SDLS)
+    zephyr_library_sources(../src/ccsds_sdls.c)
+  endif()
 endif()

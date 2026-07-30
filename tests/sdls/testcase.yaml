@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  ccsds.sdls.stage1:
+    tags:
+      - ccsds
+      - sdls
+      - psa
+    platform_allow:
+      - native_sim
+    harness: ztest

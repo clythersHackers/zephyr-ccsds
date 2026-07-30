@@ -193,8 +193,8 @@ lifecycle belong in the consuming application.
 
 - [Module user guide](doc/index.md)
 - [Space Packet sample](samples/space_packet/README.md)
-- Follow-up plans: [CFDP](doc/CFDP_PLAN.md), [TC](doc/TC_PLAN.md), and
-  [TM](doc/TM_PLAN.md)
+- Follow-up plans: [CFDP](doc/CFDP_PLAN.md), [SDLS](doc/SDLS_PLAN.md),
+  [TC](doc/TC_PLAN.md), and [TM](doc/TM_PLAN.md)
 
 ## License
 

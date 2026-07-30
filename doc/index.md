@@ -25,6 +25,9 @@ families:
   Data, EOF, Finished, ACK, and NAK PDUs; acknowledged and unacknowledged file
   transfer; closure; missing-range recovery; and modular, CRC-32C,
   IEEE 802.3 FCS, and null file checksums.
+- Space Data Link Security (SDLS) foundation: fixed-capacity caller-owned
+  Security Association state and opaque PSA key-reference tables. Transfer
+  frame security processing is not part of this API.
 
 This guide describes the implemented subset, not the complete CCSDS standards.
 The standards themselves are not distributed with this module.
@@ -83,6 +86,9 @@ All module Kconfig symbols use the `CONFIG_CCSDS_*` namespace.
 | `CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE` | 384 | 1–65535; CFDP | File Data segment workspace. |
 | `CONFIG_CCSDS_CFDP_MAX_NAK_RANGES` | 4 | 1–64; CFDP | Stored missing ranges and ranges per NAK. |
 | `CONFIG_CCSDS_CFDP_MAX_NAK_ROUNDS` | 4 | 1–255; CFDP | Recovery retry limit. |
+| `CONFIG_CCSDS_SDLS` | `n` | `CCSDS`; selects PSA AES/GCM support | Build the fixed SDLS state foundation. |
+| `CONFIG_CCSDS_SDLS_MAX_SA` | 4 | 1–255; SDLS | SA state slots embedded in each SDLS context. |
+| `CONFIG_CCSDS_SDLS_MAX_KEYS` | 8 | 1–255; SDLS | Opaque PSA key-reference slots embedded in each SDLS context. |
 
 With RS enabled, the TM transfer-frame body is
 `223 * CONFIG_CCSDS_RS_INTERLEAVE_DEPTH` bytes and must fit
@@ -109,6 +115,9 @@ Important static or embedded costs include:
   one receiver slot, filename arrays, checksum state, and missing ranges;
 - each CFDP Space Packet adapter: a primary-header-plus-maximum-PDU packet
   buffer.
+- each default SDLS context: 112 bytes for four SA states, eight opaque PSA
+  key records, immutable identifier/role arrays, and counts. Operational key
+  bytes are not stored in the context.
 
 Decoded Space Packet, TC frame, TC segment, and CFDP PDU payload pointers are
 views into caller-provided encoded buffers. Keep those buffers alive until the
@@ -163,6 +172,21 @@ Protocol engines exchange bounded units through callbacks:
   exposes `ccsds_udp_send()` as a compatible bounded-unit sender.
 
 These boundaries do not prescribe UDP, UART, radio, or another device type.
+
+## SDLS fixed state
+
+With `CONFIG_CCSDS_SDLS=y`, include `<ccsds/ccsds_sdls.h>` and allocate one
+`struct ccsds_sdls_ctx` in caller-owned storage. `ccsds_sdls_init()` copies a
+complete bounded set of static SA identifiers, roles, mutable initial state,
+and key metadata into the inline arrays. It never creates or deletes an SA and
+never retains operational key bytes.
+
+SA lookup uses the 16-bit SPI. Key lookup uses the 16-bit SDLS key identifier;
+key records hold only that identifier, role/state metadata, and an opaque
+`psa_key_id_t`. Duplicate identifiers, an unknown referenced key, malformed
+metadata, and capacity exhaustion return errors while leaving an empty
+context. Null context/configuration/output pointers are programmer contract
+violations and assert.
 
 For UDP, allocate one `struct ccsds_udp` per endpoint and provide local/peer
 IPv4 addresses, ports, maximum unit length, receive callback, thread priority,
