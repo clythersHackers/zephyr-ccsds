@@ -16,6 +16,12 @@ CMake integration, tests, samples, and application-facing callback boundaries.
 Applications retain ownership of endpoints, device drivers, filesystem layout,
 mission policy, security policy, and lifecycle behavior.
 
+The included UDP adapter provides one ready-to-use transport. The callback
+boundaries also allow consuming applications to connect other transports,
+such as serial/UART, TWAI/CAN, Bluetooth LE, or radio, without changing the
+CCSDS protocol implementation. Adapters for those transports are not currently
+included in this repository.
+
 ## Implemented Subset
 
 - CCSDS Space Packet encode/decode and APID routing.
