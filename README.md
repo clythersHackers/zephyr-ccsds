@@ -2,7 +2,14 @@
 
 `zephyr-ccsds` is a standalone Zephyr module providing reusable CCSDS packet,
 routing, transfer-frame, channel-coding, UDP adaptation, and CFDP components.
-It can be used by a normal Zephyr application without AkiraOS.
+Zephyr applications consume it through standard module discovery and select
+the required protocol components through Kconfig.
+
+The [akira-ccsds](https://github.com/clythersHackers/akira-ccsds) project
+consumes this module as a west project for its application and device
+integrations. `zephyr-ccsds` is independent of AkiraOS, so other Zephyr
+applications can use its CCSDS implementation without adopting AkiraOS or its
+product-specific policies.
 
 The module supplies public headers, neutral `CONFIG_CCSDS_*` Kconfig symbols,
 CMake integration, tests, samples, and application-facing callback boundaries.
@@ -13,7 +20,9 @@ mission policy, security policy, and lifecycle behavior.
 
 - CCSDS Space Packet encode/decode and APID routing.
 - TC transfer-frame and segment decode, complete-CLTU decode, BCH correction,
-  bounded packet reassembly, and a limited COP-1/FARM/CLCW receive profile.
+  bounded packet reassembly, and a single-VC spacecraft receive profile
+  covering sequence acceptance, lockout/retransmit state, UNLOCK and SET V(R),
+  FARM-B counting, and CLCW generation.
 - TM transfer-frame generation, per-VC packet queues and routes, CLCW
   insertion, optional FECF, randomization, and Reed-Solomon coding.
 - Caller-owned bounded-unit UDP adapter.
@@ -74,7 +83,8 @@ integration.
 
 ## Enable It In An Application
 
-A normal Zephyr application needs no module-specific CMake calls:
+Once the module is discovered, an application needs no module-specific CMake
+calls:
 
 ```cmake
 cmake_minimum_required(VERSION 3.20.0)
@@ -179,7 +189,6 @@ lifecycle belong in the consuming application.
 - [Space Packet sample](samples/space_packet/README.md)
 - Follow-up plans: [CFDP](doc/CFDP_PLAN.md), [TC](doc/TC_PLAN.md), and
   [TM](doc/TM_PLAN.md)
-- [Provenance and extraction scope](PROVENANCE.md)
 
 ## License
 
