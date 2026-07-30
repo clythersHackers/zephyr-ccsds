@@ -2,9 +2,10 @@
 
 ## Status
 
-The module currently provides bounded TC receive and TM generation paths, but
-does not provide Space Data Link Security (SDLS), cryptographic key state,
-Security Associations (SAs), or SDLS Extended Procedures (EP).
+The module provides bounded TC receive and TM generation paths plus the
+transport-independent Stage 2 SDLS wire primitives described in
+`SDLS_STAGE2_WIRE.md`. TC/TM integration and SDLS Extended Procedures remain
+later stages.
 
 This plan adds a deliberately small, statically allocated SDLS profile. It
 covers the core protocol and the minimum EP key and SA operations needed to
@@ -90,6 +91,7 @@ Add bounded Kconfig limits with small defaults:
 ```text
 CONFIG_CCSDS_SDLS_MAX_SA=4
 CONFIG_CCSDS_SDLS_MAX_KEYS=8
+CONFIG_CCSDS_SDLS_SESSION_KEY_BASE=4
 ```
 
 Four SA slots allow a minimal bidirectional profile consisting of two
@@ -97,10 +99,11 @@ preconfigured EP/control SAs and two operational traffic SAs. Compile-time
 configuration assigns each role its SPI and initial state. Reserved EP SPIs do
 not authorize implicit unprotected traffic.
 
-Eight key slots allow one pre-provisioned master key, active session keys for
-the fixed SAs, and a small number of pre-active rollover keys. The module maps
-16-bit SDLS key IDs to opaque PSA key identifiers and lifecycle state. It does
-not retain operational key bytes in its SA or key tables.
+Eight key slots allow pre-provisioned master keys, active session keys for the
+fixed SAs, and pre-active rollover keys. Key IDs address the array directly;
+the configurable session-key boundary divides the master and session ranges.
+The module maps each slot to an opaque PSA key identifier and lifecycle state.
+It does not retain operational key bytes in its SA or key tables.
 
 The limits remain configurable so applications can reduce or increase them
 without changing the APIs. All operations must reject exhaustion cleanly; no
@@ -199,11 +202,13 @@ GCM and GMAC both require IV uniqueness for a given key. This is a protocol
 correctness requirement, not an optional persistence optimization. The
 initial profile does not generate random IVs.
 
-Construct the 96-bit IV from a 32-bit monotonic ARSN:
+Construct the 96-bit IV from an independent 64-bit sender IV and a 32-bit
+monotonic ARSN:
 
 ```text
-IV[95:32] = iv_seed + ARSN * iv_stride modulo 2^64
+IV[95:32] = sender_iv
 IV[31:0]  = ARSN
+next_sender_iv = sender_iv + iv_stride modulo 2^64
 ```
 
 `iv_seed` and the odd `iv_stride` are fixed compile-time profile values. The
@@ -212,73 +217,41 @@ the upper 64 bits change with wide numerical dispersion. It is deterministic
 and predictable; it is not a cryptographic random-number generator, and
 security must not depend on its apparent randomness.
 
-ARSN is an unsigned, monotonically increasing 32-bit anti-replay sequence
-number. ARSN allocation belongs to the key slot so moving a key reference
-between predefined SAs cannot restart its sequence. The complete 12-byte
+ARSN is an unsigned 32-bit anti-replay sequence number. The volatile transmit
+counter belongs to the key slot so moving a key reference between predefined
+SAs cannot restart its sequence during one running context. The complete 12-byte
 value, including both the dispersed upper field and ARSN, must be passed as
 the `nonce`/IV argument to the PSA GCM operation. It is not sufficient to
 place the ARSN in the Security Header or additional authenticated data while
 passing a static IV to PSA.
 
-Because ARSN is unique for the lifetime of the key, the complete IV is unique
-even though the upper field is only pseudorandom-looking. The key must be
-replaced before the 32-bit ARSN wraps. The implementation rejects exhaustion
-rather than generating another frame under that key.
+The counter advances once per attempted protected transmission, including a
+PSA failure. There is no allocator, reservation range, warning threshold, or
+terminal-value check. Wrap after 2^32 messages is accepted as a theoretical
+operational condition; keys are expected to be replaced by OTAR long before
+that point.
 
-Provide a compile-time rekey warning threshold below `UINT32_MAX`. Crossing
-the threshold raises security status for operational key cycling but does not
-reuse or reset the current key's ARSN. Range reservation must refuse any range
-that would cross the terminal value, and protected transmission stops when no
-safe ARSN remains.
+The full 96-bit IV is transmitted in the Security Header. Its low 32-bit ARSN
+serves as the anti-replay sequence value; this profile does not transmit a
+separate Sequence Number field.
 
-The full 96-bit IV is transmitted in the Security Header and also serves as
-the anti-replay sequence value; this profile does not transmit a separate
-Sequence Number field.
-
-To avoid one persistent write per frame, allocate IVs in crash-safe ranges:
-
-1. Read the key's persisted `next_unreserved_arsn`.
-2. Atomically advance and persist `next_unreserved_arsn` by one configured
-   range.
-3. Only after that write succeeds, keep the current ARSN and reserved-range
-   end in RAM and issue ARSNs from the range without further persistent
-   writes.
-4. After reset, reserve a new range beginning at the persisted
-   `next_unreserved_arsn` and permanently skip unused values from the prior
-   range.
-
-`next_unreserved_arsn` is transmitter allocation state, not the receiver's
-anti-replay window. Receive state separately records the highest authenticated
-ARSN and whatever bounded history is required by the configured replay
-window.
-
-If storage is unavailable, corrupt, rolled back, or cannot atomically reserve
-the next range, protected transmission using that key must remain disabled.
-Range size is a compile-time setting chosen by the consumer to balance write
-frequency and ARSN values skipped after reset. For example, a range of
-`2^20` values requires one nonvolatile update per 1,048,576 protected frames,
-not one update per frame. The application supplies writable nonvolatile
-storage such as flash/NVS or another monotonic store; ROM is not used.
+The module does not persist or reserve counter ranges. After reset or crash,
+the operational recovery policy is to install fresh session keys by OTAR
+before protected transmission resumes. This avoids representing a theoretical
+nonvolatile allocation scheme in the small reusable context.
 
 The design must:
 
-- keep transmit IV reservation state per transmitting key slot;
+- keep one volatile transmit ARSN per transmitting key slot;
 - keep receive anti-replay state per SA;
 - never advance receive state until authentication succeeds;
-- validate that the received upper IV field matches the value derived from
-  the received ARSN and compiled seed/stride;
-- never reuse a transmit IV after reset, rollback, failed persistence, or key
-  reactivation;
-- bind a newly activated key to explicitly initialized IV/ARSN state;
+- authenticate the complete received IV while using only its low 32-bit ARSN
+  for replay processing;
+- consume a transmit ARSN even when PSA processing fails;
 - prevent one key from being used concurrently by incompatible SAs or
   directions unless the configuration explicitly proves safe separation; and
-- require an application persistence callback implementing range reservation
-  before operational transmission is enabled.
-
-Native tests may use a deterministic volatile IV allocator only in test
-configurations that do not claim reset safety. The Akira integration must
-provide atomic, rollback-protected persistence of `next_unreserved_arsn`
-before claiming operational security.
+- require a fresh OTAR session key after reset before protected transmission
+  resumes.
 
 ## Architecture
 
@@ -456,7 +429,7 @@ In the consuming application:
 
 - provide master-key and persistent PSA key provisioning;
 - configure the fixed four-SA/eight-key mission profile;
-- provide reset-safe IV/ARSN persistence;
+- enforce fresh session-key OTAR after reset before protected transmission;
 - connect TC receive and TM transmit services;
 - add narrowly scoped diagnostics without revealing secrets; and
 - verify with `./build.sh -b akiraconsole --ccsds`.
@@ -470,19 +443,19 @@ Module verification must cover:
 
 - published AES-GCM known-answer vectors through PSA;
 - GMAC known-answer vectors through the selected PSA construction;
-- deterministic IV-construction vectors, including ARSN boundaries and
-  exhaustion before wrap;
+- deterministic IV-construction vectors, including ARSN boundaries;
 - security-header/trailer round trips and bounds;
 - correct authenticated regions for TC and TM;
 - ciphertext and tag tampering;
-- replay, stale, future, exhausted, and rollover sequence values;
+- duplicate, stale, permitted-gap, excessive-gap, and natural-wrap sequence
+  values;
 - unknown, stopped, expired, and role-mismatched SAs;
-- unknown, inactive, wrong-role, and exhausted key slots;
+- unknown, inactive, and wrong-role key slots;
 - OTAR authentication failure with no partial key import;
 - atomic multi-key OTAR failure behavior;
 - activation/deactivation/rekey state transitions;
 - plaintext staging-buffer zeroization;
-- reset/persistence failure simulation;
+- reset and fresh-key recovery behavior;
 - FSR flag and last-value behavior;
 - unchanged non-SDLS TC/TM tests; and
 - full-link transfer with SDLS enabled once the inverse TC/TM harness exists.

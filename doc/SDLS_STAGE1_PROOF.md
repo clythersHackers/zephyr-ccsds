@@ -8,21 +8,21 @@ transfer-frame processing is implemented.
 
 `struct ccsds_sdls_ctx` embeds all configured SA and key slots. With the
 default `CONFIG_CCSDS_SDLS_MAX_SA=4` and
-`CONFIG_CCSDS_SDLS_MAX_KEYS=8`, compile-time checks on both native and
+`CONFIG_CCSDS_SDLS_MAX_KEYS=8`, with session keys beginning at Key ID 4,
+compile-time checks on both native and
 ESP32-S3 builds establish this layout:
 
 | Component | Count | Bytes each | Bytes |
 |---|---:|---:|---:|
 | Mutable SA state | 4 | 8 | 32 |
-| Opaque key ID and metadata | 8 | 8 | 64 |
-| SPI array | 4 | 2 | 8 |
-| SA role array | 4 | 1 | 4 |
-| Counts and alignment | — | — | 4 |
-| Total caller-owned context | — | — | 112 |
+| Key metadata and transmit counter | 8 | 12 | 96 |
+| SA role and mode arrays | — | — | 8 |
+| Sender IV state | 1 | 8 | 8 |
+| Total caller-owned context | — | — | 144 |
 
 The context has no pointers to allocated tables and no operational key-byte
 arrays. PSA key storage and the PSA provider's own resources are outside this
-112-byte protocol-state cost.
+144-byte protocol-state cost.
 
 ## PSA proof
 
@@ -34,8 +34,8 @@ cleanup. It covers:
 - authentication failure after changing the tag;
 - the NIST GCMVS AES-256 zero-plaintext, AAD-only construction used as GMAC;
 - GMAC tag verification and modified-tag rejection; and
-- fixed-state initialization, lookup, duplicates, unknown IDs, and capacity
-  exhaustion.
+- fixed-state initialization, direct lookup, duplicate slots, unknown IDs, and
+  capacity exhaustion.
 
 Run from the west workspace root:
 

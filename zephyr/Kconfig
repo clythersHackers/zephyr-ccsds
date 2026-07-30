@@ -166,16 +166,16 @@ config CCSDS_CFDP_MAX_NAK_ROUNDS
 endif # CCSDS_CFDP
 
 config CCSDS_SDLS
-	bool "Enable CCSDS Space Data Link Security foundation"
+	bool "Enable CCSDS Space Data Link Security"
 	default n
 	select MBEDTLS
 	select MBEDTLS_PSA_CRYPTO_C
 	select PSA_WANT_ALG_GCM
 	select PSA_WANT_KEY_TYPE_AES
 	help
-	  Enable the fixed-capacity SDLS state model and the PSA Crypto
-	  AES-256-GCM/GMAC provider requirements. This foundation does not
-	  process transfer frames or select algorithms at runtime.
+	  Enable fixed-capacity SDLS state and transport-independent wire
+	  processing through PSA AES-256-GCM and GMAC. Algorithms and field
+	  lengths are fixed by the compiled profile.
 
 if CCSDS_SDLS
 
@@ -190,10 +190,38 @@ config CCSDS_SDLS_MAX_SA
 config CCSDS_SDLS_MAX_KEYS
 	int "Maximum configured SDLS keys"
 	default 8
-	range 1 255
+	range 2 255
 	help
 	  Number of opaque PSA key-reference slots embedded in every SDLS
 	  context. Operational key bytes are never stored in this table.
+
+config CCSDS_SDLS_SESSION_KEY_BASE
+	int "First SDLS session-key identifier"
+	default 4
+	range 1 254
+	help
+	  Key identifiers below this value address master-key slots. Key
+	  identifiers from this value through CCSDS_SDLS_MAX_KEYS - 1 address
+	  session-key slots. This value must be less than CCSDS_SDLS_MAX_KEYS.
+
+config CCSDS_SDLS_ARSN_WINDOW
+	int "Maximum accepted SDLS ARSN advance"
+	default 1024
+	range 1 2147483647
+	help
+	  A received ARSN must be greater than the last authenticated value and
+	  may advance by at most this amount. This permits lost frames without
+	  retaining an out-of-order replay bitmap.
+
+config CCSDS_SDLS_IV_SEED_HIGH
+	hex "Upper 32 bits of the fixed SDLS IV seed"
+	default 0x00000000
+	range 0x0 0xffffffff
+
+config CCSDS_SDLS_IV_SEED_LOW
+	hex "Lower 32 bits of the fixed SDLS IV seed"
+	default 0x00000000
+	range 0x0 0xffffffff
 
 endif # CCSDS_SDLS
 

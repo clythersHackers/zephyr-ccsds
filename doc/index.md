@@ -25,9 +25,10 @@ families:
   Data, EOF, Finished, ACK, and NAK PDUs; acknowledged and unacknowledged file
   transfer; closure; missing-range recovery; and modular, CRC-32C,
   IEEE 802.3 FCS, and null file checksums.
-- Space Data Link Security (SDLS) foundation: fixed-capacity caller-owned
-  Security Association state and opaque PSA key-reference tables. Transfer
-  frame security processing is not part of this API.
+- Space Data Link Security (SDLS): fixed-capacity caller-owned Security
+  Association/key state, strict fixed-profile header/trailer codecs,
+  deterministic IV allocation, bounded receive replay protection, and
+  transport-independent AES-256-GCM/GMAC processing through PSA.
 
 This guide describes the implemented subset, not the complete CCSDS standards.
 The standards themselves are not distributed with this module.
@@ -86,9 +87,12 @@ All module Kconfig symbols use the `CONFIG_CCSDS_*` namespace.
 | `CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE` | 384 | 1–65535; CFDP | File Data segment workspace. |
 | `CONFIG_CCSDS_CFDP_MAX_NAK_RANGES` | 4 | 1–64; CFDP | Stored missing ranges and ranges per NAK. |
 | `CONFIG_CCSDS_CFDP_MAX_NAK_ROUNDS` | 4 | 1–255; CFDP | Recovery retry limit. |
-| `CONFIG_CCSDS_SDLS` | `n` | `CCSDS`; selects PSA AES/GCM support | Build the fixed SDLS state foundation. |
+| `CONFIG_CCSDS_SDLS` | `n` | `CCSDS`; selects PSA AES/GCM support | Build fixed-profile SDLS state and wire processing. |
 | `CONFIG_CCSDS_SDLS_MAX_SA` | 4 | 1–255; SDLS | SA state slots embedded in each SDLS context. |
-| `CONFIG_CCSDS_SDLS_MAX_KEYS` | 8 | 1–255; SDLS | Opaque PSA key-reference slots embedded in each SDLS context. |
+| `CONFIG_CCSDS_SDLS_MAX_KEYS` | 8 | 2–255; SDLS | Opaque PSA key-reference slots embedded in each SDLS context. |
+| `CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` | 4 | 1–254; SDLS | First Key ID assigned to a session-key slot; lower IDs are master-key slots. |
+| `CONFIG_CCSDS_SDLS_ARSN_WINDOW` | 1024 | 1–2147483647; SDLS | Maximum accepted forward gap from the last authenticated receive ARSN. |
+| `CONFIG_CCSDS_SDLS_IV_SEED_HIGH/LOW` | 0 | 32-bit hex halves; SDLS | Fixed high and low halves of the deterministic IV seed. |
 
 With RS enabled, the TM transfer-frame body is
 `223 * CONFIG_CCSDS_RS_INTERLEAVE_DEPTH` bytes and must fit
@@ -115,9 +119,10 @@ Important static or embedded costs include:
   one receiver slot, filename arrays, checksum state, and missing ranges;
 - each CFDP Space Packet adapter: a primary-header-plus-maximum-PDU packet
   buffer.
-- each default SDLS context: 112 bytes for four SA states, eight opaque PSA
-  key records, immutable identifier/role arrays, and counts. Operational key
-  bytes are not stored in the context.
+- each default SDLS context: 144 bytes for four SA/receive-counter states,
+  eight opaque PSA key/transmit-counter records, and compact profile arrays.
+  Operational key bytes and caller-owned crypto workspaces are not stored in
+  the context.
 
 Decoded Space Packet, TC frame, TC segment, and CFDP PDU payload pointers are
 views into caller-provided encoded buffers. Keep those buffers alive until the
@@ -173,20 +178,40 @@ Protocol engines exchange bounded units through callbacks:
 
 These boundaries do not prescribe UDP, UART, radio, or another device type.
 
-## SDLS fixed state
+## SDLS wire processing
 
 With `CONFIG_CCSDS_SDLS=y`, include `<ccsds/ccsds_sdls.h>` and allocate one
-`struct ccsds_sdls_ctx` in caller-owned storage. `ccsds_sdls_init()` copies a
-complete bounded set of static SA identifiers, roles, mutable initial state,
-and key metadata into the inline arrays. It never creates or deletes an SA and
-never retains operational key bytes.
+`struct ccsds_sdls_ctx` in caller-owned storage. `ccsds_sdls_init()` places
+static SA roles, modes, mutable initial state, and key metadata into inline
+arrays. It never creates or deletes an SA and never retains operational key
+bytes.
 
-SA lookup uses the 16-bit SPI. Key lookup uses the 16-bit SDLS key identifier;
-key records hold only that identifier, role/state metadata, and an opaque
-`psa_key_id_t`. Duplicate identifiers, an unknown referenced key, malformed
-metadata, and capacity exhaustion return errors while leaving an empty
-context. Null context/configuration/output pointers are programmer contract
-violations and assert.
+The configured SPI range is dense and one-based: wire SPI `1..MAX_SA` maps
+directly to SA slot `spi - 1`; reserved SPI zero is never used. Key IDs
+`0..MAX_KEYS-1` map directly to key slots. IDs below
+`CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` are master keys and IDs at or above it
+are session keys. Neither identifier nor key role is stored redundantly, and
+lookup performs no search. Unconfigured slots remain distinguishable from
+configured entries. Duplicate identifiers, unknown referenced keys, malformed
+metadata, and capacity overflow are static configuration errors and assert.
+
+`ccsds_sdls_apply_security()` accepts a compact, optionally bit-masked
+transfer-frame header plus one clear data span. Only the mask prefix through
+the final zero byte is stored; later bytes are implicitly all ones. TM and TC
+default mask arrays are provided from the standard profile. The call
+writes Security Header, protected data, and Security Trailer to caller
+storage.
+`ccsds_sdls_process_security()` selects a receive SA solely by the decoded SPI
+and exposes clear data only after tag and replay checks succeed. Both calls
+require a caller-owned workspace; null or undersized caller buffers assert,
+while malformed received wire data returns a stable error.
+The fixed wire profile uses a big-endian SPI, complete 96-bit IV, and 128-bit
+tag. Receive state is a strictly increasing ARSN with a configurable maximum
+forward gap, not a replay bitmap. Transmit state is one volatile counter per
+key; following reset, a fresh session key must be installed by OTAR before
+protected transmission resumes. See
+[the Stage 2 profile](SDLS_STAGE2_WIRE.md) for exact masking, anti-replay,
+reset policy, and footprint rules.
 
 For UDP, allocate one `struct ccsds_udp` per endpoint and provide local/peer
 IPv4 addresses, ports, maximum unit length, receive callback, thread priority,

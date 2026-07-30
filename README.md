@@ -193,6 +193,8 @@ lifecycle belong in the consuming application.
 
 - [Module user guide](doc/index.md)
 - [Space Packet sample](samples/space_packet/README.md)
+- [SDLS Stage 1 proof record](doc/SDLS_STAGE1_PROOF.md)
+- [SDLS Stage 2 wire-processing profile](doc/SDLS_STAGE2_WIRE.md)
 - Follow-up plans: [CFDP](doc/CFDP_PLAN.md), [SDLS](doc/SDLS_PLAN.md),
   [TC](doc/TC_PLAN.md), and [TM](doc/TM_PLAN.md)
 
