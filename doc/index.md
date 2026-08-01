@@ -28,7 +28,8 @@ families:
 - Space Data Link Security (SDLS): fixed-capacity caller-owned Security
   Association/key state, strict fixed-profile header/trailer codecs,
   deterministic IV allocation, bounded receive replay protection, and
-  transport-independent AES-256-GCM/GMAC processing through PSA.
+  transport-independent AES-256-GCM/GMAC processing through PSA, plus bounded
+  Appendix D OTAR, key lifecycle, and key verification Extended Procedures.
 
 This guide describes the implemented subset, not the complete CCSDS standards.
 The standards themselves are not distributed with this module.
@@ -192,8 +193,10 @@ directly to SA slot `spi - 1`; reserved SPI zero is never used. Key IDs
 `CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` are master keys and IDs at or above it
 are session keys. Neither identifier nor key role is stored redundantly, and
 lookup performs no search. Unconfigured slots remain distinguishable from
-configured entries. Duplicate identifiers, unknown referenced keys, malformed
-metadata, and capacity overflow are static configuration errors and assert.
+configured entries. A predefined SA may reference an empty session slot for
+later OTAR rollover, but remains unusable until that slot contains an Active
+key. Duplicate identifiers, malformed metadata, and capacity overflow are
+static configuration errors and assert.
 
 `ccsds_sdls_apply_security()` accepts a compact, optionally bit-masked
 transfer-frame header plus one clear data span. Only the mask prefix through
@@ -212,6 +215,17 @@ key; following reset, a fresh session key must be installed by OTAR before
 protected transmission resumes. See
 [the Stage 2 profile](SDLS_STAGE2_WIRE.md) for exact masking, anti-replay,
 reset policy, and footprint rules.
+
+The supported Extended Procedure key-management profile uses the CCSDS
+355.1-B-1 Appendix D field sizes. PDU length fields count data-field bits, not
+octets. OTAR accepts AES-256 session keys only into empty predefined slots,
+then leaves them Pre-Activation until an authenticated Activation command.
+Verification returns an AES-GCM encrypted challenge proof without exposing key
+bytes. Multi-key OTAR and lifecycle commands are atomic, and cryptographic
+workspaces are wiped on every return path. Applications provision master keys,
+authorize and transport EP commands, and own persistent-storage policy. See
+[the Stage 4 profile](SDLS_STAGE4_KEY_MANAGEMENT.md) for exact encodings,
+bounds, lifecycle rules, and deliberate restrictions.
 
 For UDP, allocate one `struct ccsds_udp` per endpoint and provide local/peer
 IPv4 addresses, ports, maximum unit length, receive callback, thread priority,

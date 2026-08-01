@@ -5,7 +5,9 @@
 The module provides bounded TC receive and TM generation paths, the
 transport-independent Stage 2 SDLS wire primitives described in
 `SDLS_STAGE2_WIRE.md`, and the configured Stage 3 TC/TM integration described
-in `SDLS_STAGE3_INTEGRATION.md`. SDLS Extended Procedures remain later stages.
+in `SDLS_STAGE3_INTEGRATION.md`. The bounded Stage 4 Extended Procedure key
+management subset is described in `SDLS_STAGE4_KEY_MANAGEMENT.md`. SA
+management and monitoring Extended Procedures remain later stages.
 
 This plan adds a deliberately small, statically allocated SDLS profile. It
 covers the core protocol and the minimum EP key and SA operations needed to
@@ -417,11 +419,14 @@ Completed by the fixed integration profile in `SDLS_STAGE3_INTEGRATION.md`:
 
 ### Stage 4: EP Key Management
 
-- Add bounded EP codecs.
-- Implement OTAR into fixed key slots.
-- Implement key activation, deactivation, and verification.
-- Demonstrate upload, verification, activation, and operational use of a new
-  session key without rebooting.
+Completed by the fixed Appendix D profile in
+`SDLS_STAGE4_KEY_MANAGEMENT.md`:
+
+- bounded OTAR, Key Activation, Key Deactivation, and Key Verification codecs;
+- atomic AES-256-GCM OTAR into empty predefined session-key slots;
+- validated key lifecycle transitions and possession verification; and
+- upload, verification, activation, and operational use of a new session key
+  through an already-associated predefined SA without rebooting.
 
 ### Stage 5: EP SA Management and FSR
 
@@ -486,8 +491,8 @@ they land.
   configured fixed SA.
 - OTAR imports a new AES-256 session key into a free fixed slot only after GCM
   authentication succeeds.
-- A newly uploaded key can be verified, activated, and assigned through Rekey
-  SA without dynamic allocation.
+- A newly uploaded key can be verified, activated, and used through an
+  already-associated predefined SA without dynamic allocation or SA Rekey.
 - No runtime command can create or delete an SA.
 - No GCM/GMAC IV is reused with the same key, including across the tested
   reset model.

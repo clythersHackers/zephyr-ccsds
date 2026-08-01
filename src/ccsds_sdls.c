@@ -82,8 +82,6 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
             __ASSERT(sas[i].key_id >= CONFIG_CCSDS_SDLS_SESSION_KEY_BASE &&
                          sas[i].key_id < CONFIG_CCSDS_SDLS_MAX_KEYS,
                      "SDLS SA must reference a session-key slot");
-            __ASSERT(ctx->keys[sas[i].key_id].psa_key_id != PSA_KEY_ID_NULL,
-                     "SDLS SA references unknown key");
         }
 
         ctx->sa_roles[sa_slot] = (uint8_t)sas[i].role;

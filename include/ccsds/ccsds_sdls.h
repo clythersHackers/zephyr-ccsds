@@ -26,6 +26,37 @@ extern "C" {
     (CCSDS_SDLS_SECURITY_HEADER_LEN + CCSDS_SDLS_SECURITY_TRAILER_LEN)
 #define CCSDS_SDLS_KEY_SLOT_NONE UINT8_MAX
 
+/* CCSDS 355.1-B-1 annex D fixed Key Management profile. */
+#define CCSDS_SDLS_EP_HEADER_LEN 3u
+#define CCSDS_SDLS_EP_KEY_LEN 32u
+#define CCSDS_SDLS_EP_CHALLENGE_LEN 16u
+#define CCSDS_SDLS_EP_OTAR_BLOCK_LEN (2u + CCSDS_SDLS_EP_KEY_LEN)
+#define CCSDS_SDLS_EP_VERIFY_COMMAND_ENTRY_LEN                                 \
+    (2u + CCSDS_SDLS_EP_CHALLENGE_LEN)
+#define CCSDS_SDLS_EP_VERIFY_REPLY_ENTRY_LEN                                   \
+    (2u + CCSDS_SDLS_IV_LEN + CCSDS_SDLS_EP_CHALLENGE_LEN + CCSDS_SDLS_TAG_LEN)
+#define CCSDS_SDLS_EP_MAX_OTAR_KEYS                                            \
+    (CONFIG_CCSDS_SDLS_MAX_KEYS - CONFIG_CCSDS_SDLS_SESSION_KEY_BASE)
+#define CCSDS_SDLS_EP_MAX_RECIPIENTS CONFIG_CCSDS_SDLS_MAX_KEYS
+#define CCSDS_SDLS_EP_OTAR_DATA_MAX                                            \
+    (2u + CCSDS_SDLS_IV_LEN +                                                  \
+     CCSDS_SDLS_EP_MAX_OTAR_KEYS * CCSDS_SDLS_EP_OTAR_BLOCK_LEN +              \
+     CCSDS_SDLS_TAG_LEN)
+#define CCSDS_SDLS_EP_OTAR_PDU_MAX                                             \
+    (CCSDS_SDLS_EP_HEADER_LEN + CCSDS_SDLS_EP_OTAR_DATA_MAX)
+#define CCSDS_SDLS_EP_KEY_COMMAND_PDU_MAX                                      \
+    (CCSDS_SDLS_EP_HEADER_LEN + 2u * CCSDS_SDLS_EP_MAX_RECIPIENTS)
+#define CCSDS_SDLS_EP_VERIFY_COMMAND_PDU_MAX                                   \
+    (CCSDS_SDLS_EP_HEADER_LEN +                                                \
+     CCSDS_SDLS_EP_VERIFY_COMMAND_ENTRY_LEN * CCSDS_SDLS_EP_MAX_RECIPIENTS)
+#define CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX                                     \
+    (CCSDS_SDLS_EP_HEADER_LEN +                                                \
+     CCSDS_SDLS_EP_VERIFY_REPLY_ENTRY_LEN * CCSDS_SDLS_EP_MAX_RECIPIENTS)
+#define CCSDS_SDLS_EP_PLAINTEXT_MAX                                            \
+    (CCSDS_SDLS_EP_MAX_OTAR_KEYS * CCSDS_SDLS_EP_OTAR_BLOCK_LEN)
+#define CCSDS_SDLS_EP_WORKSPACE_MIN                                            \
+    MAX(CCSDS_SDLS_EP_PLAINTEXT_MAX, CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX)
+
 /*
  * CCSDS 355.0-B-2 default authentication masks for the fixed TM and TC
  * primary headers. These are compact prefixes: bytes after the array
@@ -58,6 +89,21 @@ enum ccsds_sdls_error {
     CCSDS_SDLS_ERR_SA_STATE = -1004,
     CCSDS_SDLS_ERR_KEY = -1005,
     CCSDS_SDLS_ERR_PSA = -1006,
+    CCSDS_SDLS_ERR_UNSUPPORTED = -1007,
+    CCSDS_SDLS_ERR_KEY_STATE = -1008,
+    CCSDS_SDLS_ERR_CAPACITY = -1009,
+};
+
+enum ccsds_sdls_ep_procedure {
+    CCSDS_SDLS_EP_OTAR = 1,
+    CCSDS_SDLS_EP_KEY_ACTIVATION = 2,
+    CCSDS_SDLS_EP_KEY_DEACTIVATION = 3,
+    CCSDS_SDLS_EP_KEY_VERIFICATION = 4,
+};
+
+enum ccsds_sdls_ep_type {
+    CCSDS_SDLS_EP_COMMAND = 0,
+    CCSDS_SDLS_EP_REPLY = 1,
 };
 
 enum ccsds_sdls_sa_state {
@@ -146,6 +192,52 @@ struct ccsds_sdls_workspace {
     size_t capacity;
 };
 
+/** Decoded common EP header. data aliases the caller-owned encoded PDU. */
+struct ccsds_sdls_ep_pdu {
+    const uint8_t *data;
+    size_t data_len;
+    uint8_t procedure;
+    uint8_t type;
+};
+
+/** Ciphertext-only OTAR representation; no plaintext keys are exposed. */
+struct ccsds_sdls_ep_otar {
+    uint8_t encrypted_key_blocks[CCSDS_SDLS_EP_PLAINTEXT_MAX];
+    uint8_t iv[CCSDS_SDLS_IV_LEN];
+    uint8_t tag[CCSDS_SDLS_TAG_LEN];
+    uint16_t master_key_id;
+    size_t key_count;
+};
+
+struct ccsds_sdls_ep_key_command {
+    uint16_t key_ids[CCSDS_SDLS_EP_MAX_RECIPIENTS];
+    size_t key_count;
+};
+
+struct ccsds_sdls_ep_verify_command_entry {
+    uint8_t challenge[CCSDS_SDLS_EP_CHALLENGE_LEN];
+    uint16_t key_id;
+};
+
+struct ccsds_sdls_ep_verify_command {
+    struct ccsds_sdls_ep_verify_command_entry
+        entries[CCSDS_SDLS_EP_MAX_RECIPIENTS];
+    size_t key_count;
+};
+
+struct ccsds_sdls_ep_verify_reply_entry {
+    uint8_t iv[CCSDS_SDLS_IV_LEN];
+    uint8_t encrypted_challenge[CCSDS_SDLS_EP_CHALLENGE_LEN];
+    uint8_t tag[CCSDS_SDLS_TAG_LEN];
+    uint16_t key_id;
+};
+
+struct ccsds_sdls_ep_verify_reply {
+    struct ccsds_sdls_ep_verify_reply_entry
+        entries[CCSDS_SDLS_EP_MAX_RECIPIENTS];
+    size_t key_count;
+};
+
 /** Caller-owned fixed-capacity SDLS state. */
 struct ccsds_sdls_ctx {
     struct ccsds_sdls_sa sas[CONFIG_CCSDS_SDLS_MAX_SA];
@@ -184,6 +276,13 @@ BUILD_ASSERT(CONFIG_CCSDS_SDLS_SESSION_KEY_BASE <
              "SDLS profile requires at least one session-key slot");
 BUILD_ASSERT(CONFIG_CCSDS_SDLS_ARSN_WINDOW > 0,
              "SDLS receive ARSN window must be nonzero");
+BUILD_ASSERT(CCSDS_SDLS_EP_OTAR_DATA_MAX <= UINT16_MAX / 8u,
+             "SDLS EP OTAR bit length must fit 16 bits");
+BUILD_ASSERT(CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX - CCSDS_SDLS_EP_HEADER_LEN <=
+                 UINT16_MAX / 8u,
+             "SDLS EP verification bit length must fit 16 bits");
+BUILD_ASSERT(CCSDS_SDLS_EP_MAX_OTAR_KEYS > 0u,
+             "SDLS EP requires a session-key slot");
 
 /**
  * Initialize fixed SDLS state.
@@ -246,6 +345,52 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
                                 size_t protected_len,
                                 struct ccsds_sdls_workspace workspace,
                                 uint8_t *out, size_t out_capacity);
+
+int ccsds_sdls_ep_pdu_decode(const uint8_t *encoded, size_t encoded_len,
+                             struct ccsds_sdls_ep_pdu *pdu);
+void ccsds_sdls_ep_otar_encode(const struct ccsds_sdls_ep_otar *otar,
+                               uint8_t *out, size_t out_capacity);
+int ccsds_sdls_ep_otar_decode(const uint8_t *encoded, size_t encoded_len,
+                              struct ccsds_sdls_ep_otar *otar);
+void ccsds_sdls_ep_key_command_encode(
+    enum ccsds_sdls_ep_procedure procedure,
+    const struct ccsds_sdls_ep_key_command *command, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_key_command_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    enum ccsds_sdls_ep_procedure expected_procedure,
+    struct ccsds_sdls_ep_key_command *command);
+void ccsds_sdls_ep_verify_command_encode(
+    const struct ccsds_sdls_ep_verify_command *command, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_verify_command_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_verify_command *command);
+void ccsds_sdls_ep_verify_reply_encode(
+    const struct ccsds_sdls_ep_verify_reply *reply, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_verify_reply_decode(const uint8_t *encoded,
+                                      size_t encoded_len,
+                                      struct ccsds_sdls_ep_verify_reply *reply);
+
+int ccsds_sdls_ep_process_otar(struct ccsds_sdls_ctx *ctx,
+                               const uint8_t *encoded, size_t encoded_len,
+                               struct ccsds_sdls_workspace workspace);
+int ccsds_sdls_ep_process_key_activation(struct ccsds_sdls_ctx *ctx,
+                                         const uint8_t *encoded,
+                                         size_t encoded_len);
+int ccsds_sdls_ep_process_key_deactivation(struct ccsds_sdls_ctx *ctx,
+                                           const uint8_t *encoded,
+                                           size_t encoded_len);
+int ccsds_sdls_ep_process_key_verification(
+    struct ccsds_sdls_ctx *ctx, const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_workspace workspace, uint8_t *reply,
+    size_t reply_capacity);
+int ccsds_sdls_ep_check_key_verification(struct ccsds_sdls_ctx *ctx,
+                                         const uint8_t *command,
+                                         size_t command_len,
+                                         const uint8_t *reply, size_t reply_len,
+                                         struct ccsds_sdls_workspace workspace);
 
 #ifdef __cplusplus
 }

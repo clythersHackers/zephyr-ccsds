@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 tests:
-  ccsds.sdls.stage2:
+  ccsds.sdls.stage4:
     tags:
       - ccsds
       - sdls

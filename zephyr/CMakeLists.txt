@@ -50,6 +50,9 @@ if(CONFIG_CCSDS)
   endif()
 
   if(CONFIG_CCSDS_SDLS)
-    zephyr_library_sources(../src/ccsds_sdls.c)
+    zephyr_library_sources(
+      ../src/ccsds_sdls.c
+      ../src/ccsds_sdls_ep.c
+    )
   endif()
 endif()
