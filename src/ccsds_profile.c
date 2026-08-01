@@ -41,6 +41,7 @@ enum ccsds_profile_tc_cltu_stage {
     CCSDS_PROFILE_TC_CLTU_STAGE_OVERSIZE,
     CCSDS_PROFILE_TC_CLTU_STAGE_CLTU,
     CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME,
+    CCSDS_PROFILE_TC_CLTU_STAGE_SDLS,
     CCSDS_PROFILE_TC_CLTU_STAGE_CONTROL,
     CCSDS_PROFILE_TC_CLTU_STAGE_PACKET,
     CCSDS_PROFILE_TC_CLTU_STAGE_ROUTER,
@@ -94,6 +95,7 @@ static void record_tc_result(const struct ccsds_profile_tc_cltu_result *result,
         tc_rx_stats.cltu_decode_failures++;
         break;
     case CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME:
+    case CCSDS_PROFILE_TC_CLTU_STAGE_SDLS:
     case CCSDS_PROFILE_TC_CLTU_STAGE_PACKET:
         tc_rx_stats.tc_frame_rejects++;
         break;
@@ -352,6 +354,17 @@ void ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
     profile->router = router;
 }
 
+#ifdef CONFIG_CCSDS_SDLS
+void ccsds_profile_tc_rx_set_sdls(struct ccsds_profile_tc_rx *profile,
+                                  struct ccsds_sdls_ctx *sdls)
+{
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    __ASSERT(sdls != NULL, "TC SDLS context is NULL");
+
+    profile->sdls = sdls;
+}
+#endif
+
 int ccsds_profile_tc_set_accepted_vcid(struct ccsds_profile_tc_rx *profile,
                                        uint8_t tc_vcid)
 {
@@ -435,6 +448,44 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
         record_tc_result(&result, cltu_len, -EACCES);
         return -EACCES;
     }
+
+    /* Type-C control frames are Type-BC; the other combination is reserved. */
+    if (frame.control_command && !frame.bypass) {
+        LOG_WRN("TC frame rejected reserved service type: bypass=0 control=1");
+        set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME,
+                            -EINVAL);
+        record_tc_result(&result, cltu_len, -EINVAL);
+        return -EINVAL;
+    }
+
+#ifdef CONFIG_CCSDS_SDLS
+    /* CCSDS Type-C frames carry neither an SDLS header nor an SDLS trailer. */
+    if (profile->sdls != NULL && !frame.control_command) {
+        struct ccsds_sdls_auth_header auth = {
+            .data = profile->frame_buf,
+            .mask = ccsds_sdls_tc_default_auth_mask,
+            .len = CCSDS_TC_PRIMARY_HDR_LEN,
+            .mask_len = CCSDS_SDLS_TC_DEFAULT_AUTH_MASK_LEN,
+        };
+        struct ccsds_sdls_workspace workspace = {
+            .data = profile->sdls_workspace,
+            .capacity = sizeof(profile->sdls_workspace),
+        };
+
+        ret = ccsds_sdls_process_security(
+            profile->sdls, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, auth, frame.data,
+            frame.data_len, workspace, profile->frame_buf,
+            sizeof(profile->frame_buf));
+        if (ret != 0) {
+            set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_SDLS, ret);
+            record_tc_result(&result, cltu_len, ret);
+            return ret;
+        }
+
+        frame.data = profile->frame_buf;
+        frame.data_len -= CCSDS_SDLS_PROTECTED_OVERHEAD;
+    }
+#endif
 
     profile->vc_state.farm_b_counter =
         (uint8_t)((profile->vc_state.farm_b_counter + 1u) & 0x03u);

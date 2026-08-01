@@ -10,6 +10,10 @@
 
 #include <zephyr/kernel.h>
 
+#ifdef CONFIG_CCSDS_SDLS
+#include "ccsds_sdls.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -63,6 +67,19 @@ typedef int (*ccsds_tm_clcw_provider_t)(uint32_t *clcw, void *user_data);
  * frame counters, route registrations, and per-VC route masks.
  */
 void ccsds_tm_frame_init(void);
+
+#ifdef CONFIG_CCSDS_SDLS
+/**
+ * @brief Enable the configured operational TM transmit SDLS path.
+ *
+ * The context remains caller-owned and must outlive the TM generator.
+ * Security is applied to every subsequently generated TM frame.
+ *
+ * @param sdls Initialized SDLS context.
+ * @param spi SPI of the operational TM transmit SA.
+ */
+void ccsds_tm_frame_set_sdls(struct ccsds_sdls_ctx *sdls, uint16_t spi);
+#endif
 
 /**
  * @brief Register a callback for one TM route bit.

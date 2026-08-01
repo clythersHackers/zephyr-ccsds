@@ -13,6 +13,7 @@ extern "C" {
 #endif
 
 #define CCSDS_TC_VC_COUNT 64u
+#define CCSDS_TC_PRIMARY_HDR_LEN 5u
 
 struct ccsds_tc_frame {
     uint16_t spacecraft_id;

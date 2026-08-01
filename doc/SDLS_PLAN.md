@@ -2,10 +2,10 @@
 
 ## Status
 
-The module provides bounded TC receive and TM generation paths plus the
+The module provides bounded TC receive and TM generation paths, the
 transport-independent Stage 2 SDLS wire primitives described in
-`SDLS_STAGE2_WIRE.md`. TC/TM integration and SDLS Extended Procedures remain
-later stages.
+`SDLS_STAGE2_WIRE.md`, and the configured Stage 3 TC/TM integration described
+in `SDLS_STAGE3_INTEGRATION.md`. SDLS Extended Procedures remain later stages.
 
 This plan adds a deliberately small, statically allocated SDLS profile. It
 covers the core protocol and the minimum EP key and SA operations needed to
@@ -80,6 +80,10 @@ Each configured channel has exactly one of three processing modes:
 - clear, with no SDLS security header or trailer;
 - authenticated with AES-256-GMAC; or
 - authenticated and encrypted with AES-256-GCM.
+
+For TC, these modes apply to Type-D data frames. Standard Type-BC control
+frames, including UNLOCK and SET V(R), carry neither an SDLS Security Header
+nor Security Trailer and remain outside SDLS processing.
 
 The SPI in a protected frame selects the static SA. No separate algorithm or
 cipher-suite identifier is needed.
@@ -403,10 +407,13 @@ fully deterministic and tested.
 
 ### Stage 3: TC and TM Integration
 
-- Insert the SDLS boundaries at the specified frame-processing points.
-- Add one secured TC receive profile and one secured TM transmit profile.
-- Preserve byte-for-byte legacy output and existing tests when SDLS is off.
-- Add end-to-end tamper, replay, wrong-SPI, and wrong-key rejection tests.
+Completed by the fixed integration profile in `SDLS_STAGE3_INTEGRATION.md`:
+
+- SDLS processing is inserted at the specified frame-processing points.
+- One GMAC TC receive path and one GCM TM transmit path are configurable.
+- The SDLS-disabled legacy paths remain unchanged.
+- End-to-end integration tests cover delivery, tampering, replay, excessive
+  gaps, SA/key failures, unknown SPI, and wrong keys.
 
 ### Stage 4: EP Key Management
 

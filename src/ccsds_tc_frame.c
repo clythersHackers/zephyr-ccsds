@@ -8,7 +8,6 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/byteorder.h>
 
-#define CCSDS_TC_PRIMARY_HDR_LEN 5u
 #define CCSDS_TC_FILL_BYTE 0x55u
 #define CCSDS_TC_VERSION_MASK 0x03u
 #define CCSDS_TC_RESERVED_MASK 0x03u

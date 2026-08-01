@@ -11,6 +11,9 @@
 #ifdef CONFIG_CCSDS_FRAME_SUPPORT
 #include "ccsds_cltu.h"
 #include "ccsds_tc_frame.h"
+#ifdef CONFIG_CCSDS_SDLS
+#include "ccsds_sdls.h"
+#endif
 #endif
 
 #ifdef __cplusplus
@@ -43,6 +46,11 @@ struct ccsds_profile_tc_rx {
     struct ccsds_profile_tc_vc_state vc_state;
     struct ccsds_profile_tc_reassembly reassembly;
     uint8_t frame_buf[CONFIG_CCSDS_MAX_FRAME_LEN];
+#ifdef CONFIG_CCSDS_SDLS
+    struct ccsds_sdls_ctx *sdls;
+    uint8_t sdls_workspace[CONFIG_CCSDS_MAX_FRAME_LEN +
+                           CCSDS_SDLS_SECURITY_HEADER_LEN];
+#endif
 };
 
 struct ccsds_profile_tc_rx_stats {
@@ -70,6 +78,20 @@ struct ccsds_profile_tc_rx_stats {
  */
 void ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
                               struct ccsds_router *router);
+
+#ifdef CONFIG_CCSDS_SDLS
+/**
+ * @brief Require SDLS GMAC authentication on this TC receive profile.
+ *
+ * The SDLS context and its configured operational TC receive SA remain
+ * caller-owned and must outlive the receive profile.
+ *
+ * @param profile Generic TC receive profile.
+ * @param sdls Initialized SDLS context.
+ */
+void ccsds_profile_tc_rx_set_sdls(struct ccsds_profile_tc_rx *profile,
+                                  struct ccsds_sdls_ctx *sdls);
+#endif
 
 /**
  * @brief Decode one complete TC CLTU and dispatch its Space Packet by APID.
