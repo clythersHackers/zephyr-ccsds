@@ -9,24 +9,29 @@ cryptographic, lookup, nonce, replay, authentication-mask, or endian layer.
 `ccsds_profile_tc_rx_set_sdls()` configures a caller-owned SDLS context on one
 TC receive profile. After CLTU decode, optional derandomization, TC primary
 header validation, and accepted-VC selection, the profile distinguishes
-Type-D data frames from Type-BC control frames. For Type-D frames, it passes
-the complete protected data region to `ccsds_sdls_process_security()` with:
+Type-D data frames from Type-BC control frames. The mission wire profile keeps
+the one-octet TC Segment Header directly after the five-octet TC primary
+header. For Type-D frames, the profile passes only the bytes after that clear
+segment header to `ccsds_sdls_process_security()` with:
 
-- the operational TC receive role;
-- the five-octet TC primary header;
+- a TC receive direction;
+- the six-octet TC primary-header plus segment-header prefix;
 - `ccsds_sdls_tc_default_auth_mask`; and
 - the caller-owned bounded workspace embedded in the TC profile.
 
-The configured SA fixes GMAC mode. Its clear Frame Data is authenticated but
-not encrypted. On success the existing COP-1/FARM, segment reassembly, and APID
-routing path receives the authenticated clear data. On any format, SPI, SA,
+The segment header, including MAP ID, remains clear but is authenticated as
+additional data. The SDLS Security Header therefore begins at byte offset six.
+In GCM mode the Space Packet bytes are encrypted and authenticated; in GMAC
+mode they remain clear and are authenticated. On success the existing
+COP-1/FARM, segment reassembly, and MAP ID/APID routing path receives the
+authenticated segment header and clear packet data. On any format, SPI, SA,
 key, replay, PSA, or authentication error, the function returns that error
 through the existing TC status path before FARM-B, COP-1, reassembly, routing,
 or application state changes.
 
-The TC primary header is parsed only far enough to establish the transfer-frame
-boundary and configured channel before authentication. No unauthenticated
-Frame Data is exposed to downstream processing.
+The TC primary and segment headers may be examined before authentication to
+establish the transfer-frame boundary, channel, and MAP ID. No packet data and
+no state-changing dispatch is exposed before authentication succeeds.
 
 Per CCSDS TC Space Data Link Protocol, Type-BC control frames such as UNLOCK
 and SET V(R) do not carry an SDLS Security Header or Security Trailer. They

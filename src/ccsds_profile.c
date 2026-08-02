@@ -61,6 +61,21 @@ struct ccsds_profile_segment_dispatch {
     uint32_t packets_dispatched;
 };
 
+static int dispatch_tc_packet(struct ccsds_profile_segment_dispatch *dispatch,
+                              uint8_t map_id,
+                              const struct ccsds_space_packet *packet)
+{
+    const struct ccsds_profile_map_apid_route *route =
+        &dispatch->profile->map_apid_route;
+
+    if (route->active && route->map_id == map_id &&
+        route->apid == packet->apid) {
+        return route->handler(packet, route->user_data);
+    }
+
+    return ccsds_router_dispatch(dispatch->router, packet);
+}
+
 static void init_tc_result(struct ccsds_profile_tc_cltu_result *result)
 {
     __ASSERT(result != NULL, "TC CLTU result is NULL");
@@ -146,7 +161,7 @@ static int dispatch_tc_segment_part(
             return ret;
         }
 
-        ret = ccsds_router_dispatch(dispatch->router, &packet);
+        ret = dispatch_tc_packet(dispatch, part->map_id, &packet);
         if (ret != 0) {
             return ret;
         }
@@ -201,7 +216,7 @@ static int dispatch_tc_segment_part(
     ret = ccsds_space_packet_decode(reassembly->buffer, reassembly->len,
                                     &packet);
     if (ret == 0) {
-        ret = ccsds_router_dispatch(dispatch->router, &packet);
+        ret = dispatch_tc_packet(dispatch, reassembly->map_id, &packet);
     }
 
     memset(reassembly, 0, sizeof(*reassembly));
@@ -354,6 +369,28 @@ void ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
     profile->router = router;
 }
 
+int ccsds_profile_tc_set_map_apid_handler(
+    struct ccsds_profile_tc_rx *profile, uint8_t map_id, uint16_t apid,
+    ccsds_profile_map_apid_handler_t handler, void *user_data)
+{
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    __ASSERT(handler != NULL, "TC MAP/APID handler is NULL");
+
+    if (map_id > CCSDS_TC_MAP_ID_MAX || apid > CCSDS_APID_MAX) {
+        return -EINVAL;
+    }
+
+    profile->map_apid_route = (struct ccsds_profile_map_apid_route){
+        .handler = handler,
+        .user_data = user_data,
+        .apid = apid,
+        .map_id = map_id,
+        .active = true,
+    };
+
+    return 0;
+}
+
 #ifdef CONFIG_CCSDS_SDLS
 void ccsds_profile_tc_rx_set_sdls(struct ccsds_profile_tc_rx *profile,
                                   struct ccsds_sdls_ctx *sdls)
@@ -461,10 +498,12 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 #ifdef CONFIG_CCSDS_SDLS
     /* CCSDS Type-C frames carry neither an SDLS header nor an SDLS trailer. */
     if (profile->sdls != NULL && !frame.control_command) {
+        uint8_t segment_header;
+        size_t clear_segment_data_len;
         struct ccsds_sdls_auth_header auth = {
             .data = profile->frame_buf,
             .mask = ccsds_sdls_tc_default_auth_mask,
-            .len = CCSDS_TC_PRIMARY_HDR_LEN,
+            .len = CCSDS_TC_PRIMARY_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN,
             .mask_len = CCSDS_SDLS_TC_DEFAULT_AUTH_MASK_LEN,
         };
         struct ccsds_sdls_workspace workspace = {
@@ -472,9 +511,19 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
             .capacity = sizeof(profile->sdls_workspace),
         };
 
+        if (frame.data_len < CCSDS_TC_SEGMENT_HDR_LEN) {
+            set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_PACKET,
+                                -EINVAL);
+            record_tc_result(&result, cltu_len, -EINVAL);
+            return -EINVAL;
+        }
+        segment_header = frame.data[0];
+
         ret = ccsds_sdls_process_security(
-            profile->sdls, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, auth, frame.data,
-            frame.data_len, workspace, profile->frame_buf,
+            profile->sdls, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, auth,
+            frame.data + CCSDS_TC_SEGMENT_HDR_LEN,
+            frame.data_len - CCSDS_TC_SEGMENT_HDR_LEN, workspace,
+            profile->frame_buf,
             sizeof(profile->frame_buf));
         if (ret != 0) {
             set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_SDLS, ret);
@@ -482,6 +531,12 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
             return ret;
         }
 
+        clear_segment_data_len =
+            frame.data_len - CCSDS_TC_SEGMENT_HDR_LEN -
+            CCSDS_SDLS_PROTECTED_OVERHEAD;
+        memmove(profile->frame_buf + CCSDS_TC_SEGMENT_HDR_LEN,
+                profile->frame_buf, clear_segment_data_len);
+        profile->frame_buf[0] = segment_header;
         frame.data = profile->frame_buf;
         frame.data_len -= CCSDS_SDLS_PROTECTED_OVERHEAD;
     }
@@ -499,6 +554,11 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 
     ret = update_tc_sequence_state(profile, &frame);
     if (ret != 0) {
+#ifdef CONFIG_CCSDS_SDLS
+        if (profile->sdls != NULL) {
+            profile->sdls->authenticated_rx_valid = false;
+        }
+#endif
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME,
                             ret);
         record_tc_result(&result, cltu_len, ret);
@@ -507,6 +567,11 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 
     ret = ccsds_tc_segment_decode_frame(&frame, &segment);
     if (ret != 0) {
+#ifdef CONFIG_CCSDS_SDLS
+        if (profile->sdls != NULL) {
+            profile->sdls->authenticated_rx_valid = false;
+        }
+#endif
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_PACKET, ret);
         record_tc_result(&result, cltu_len, ret);
         return ret;
@@ -514,6 +579,11 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
 
     ret = ccsds_tc_segment_walk_parts(&segment, dispatch_tc_segment_part,
                                       &dispatch);
+#ifdef CONFIG_CCSDS_SDLS
+    if (profile->sdls != NULL) {
+        profile->sdls->authenticated_rx_valid = false;
+    }
+#endif
     if (ret != 0) {
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_ROUTER, ret);
         record_tc_result(&result, cltu_len, ret);

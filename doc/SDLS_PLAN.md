@@ -6,8 +6,9 @@ The module provides bounded TC receive and TM generation paths, the
 transport-independent Stage 2 SDLS wire primitives described in
 `SDLS_STAGE2_WIRE.md`, and the configured Stage 3 TC/TM integration described
 in `SDLS_STAGE3_INTEGRATION.md`. The bounded Stage 4 Extended Procedure key
-management subset is described in `SDLS_STAGE4_KEY_MANAGEMENT.md`. SA
-management and monitoring Extended Procedures remain later stages.
+management subset is described in `SDLS_STAGE4_KEY_MANAGEMENT.md`. The fixed-SA
+management and Frame Security Report subset is described in
+`SDLS_STAGE5_SA_MANAGEMENT_FSR.md`.
 
 This plan adds a deliberately small, statically allocated SDLS profile. It
 covers the core protocol and the minimum EP key and SA operations needed to
@@ -117,17 +118,21 @@ heap fallback is permitted.
 
 ### Static Security Associations
 
-There is no general SA descriptor. Compile-time configuration defines four
-fixed roles:
+There is no general SA descriptor. Compile-time configuration records an RX or
+TX direction for each predefined SA. The legacy role names distinguish the
+mission uses for which the original table entries were provisioned:
 
 - EP command receive;
 - EP reply transmit;
 - operational TC receive; and
 - operational TM transmit.
 
-Each role has one configured SPI. The calling role fixes the direction, link
-type, GMAC/GCM operation, authentication profile, 14-octet security header,
-and 16-octet security trailer. These values are not repeated in each SA slot.
+They are not separate frame-security channels: an incoming Type-D TC frame may
+use any configured operational RX SA, selected solely by its SPI, and an
+outgoing protected frame may use any compatible TX SA. EP commands and replies
+are ordinary Space Packets carried inside those secured frames. A configurable
+MAP ID/APID route selects the EP key-management service after authentication,
+decryption, segment handling, and packet extraction.
 
 An SA slot contains only mutable protocol state:
 
@@ -294,19 +299,36 @@ packet admission
 
 TC receive processing:
 
-```text
-CLTU/channel decode
--> TC primary-header validation
--> SDLS ProcessSecurity
--> COP-1/FARM sequence handling
--> TC segment parsing/reassembly
--> APID routing
+```mermaid
+flowchart TD
+    A[CLTU decode and derandomization] --> B[Decode and validate TC primary header]
+    B --> C{TC service type}
+
+    C -->|Type-BC control| D[Bypass SDLS]
+    D --> E[Validate and handle UNLOCK or SET V&#40;R&#41;]
+
+    C -->|Type-D data| F[Read clear TC segment header and MAP ID]
+    F --> G[Read SPI from SDLS Security Header]
+    G --> H[Select configured operational RX SA]
+    H --> I[Authenticate six-byte header prefix and authenticate/decrypt packet data]
+    I --> J{Security accepted?}
+
+    J -->|No| K[Set Alarm and relevant FSR error bit; record last SPI]
+    K --> L[Reject frame]
+    J -->|Yes| M[Clear FSR Bad SN, Bad MAC, and Bad SA; update last SPI and SN LSB]
+    M --> N[COP-1/FARM sequence handling]
+    N --> O[TC segment handling and packet reassembly]
+    O --> P[Route packet by MAP ID and APID]
+    P --> Q[EP key management or another packet service]
 ```
 
 Authentication failure, replay failure, unknown SPI, or invalid SA state must
-prevent COP-1 acceptance and packet dispatch. COP management frames that are
-outside the supported SDLS service remain governed by the applicable TC/SDLS
-rules rather than being forced through an operational SA.
+prevent COP-1 acceptance and packet dispatch for Type-D frames. Type-BC control
+frames, including UNLOCK and SET V(R), bypass security checking entirely and
+enter the control-command path without an SDLS Security Header or Security
+Trailer. A successfully authenticated Type-D frame clears the three transient
+FSR error-condition bits and records its SPI and low ARSN octet. The Alarm flag
+remains latched until an Alarm Flag Reset procedure clears it.
 
 ### Frame API Changes
 
@@ -430,10 +452,13 @@ Completed by the fixed Appendix D profile in
 
 ### Stage 5: EP SA Management and FSR
 
-- Implement the selected predefined-SA procedures.
-- Implement FSR generation and TM OCF integration.
-- Demonstrate rekey of fixed TC and TM SAs.
-- Demonstrate that unsupported Create/Delete SA commands cannot mutate state.
+Completed by the fixed Appendix profile in
+`SDLS_STAGE5_SA_MANAGEMENT_FSR.md`:
+
+- selected predefined-SA lifecycle, rekey, ARSN, query, and alarm procedures;
+- four-octet FSR generation and transactional TM OCF integration;
+- live rekey of fixed TC receive and TM transmit SAs; and
+- rejection of unsupported Create/Delete SA commands without state mutation.
 
 ### Stage 6: Akira Integration
 

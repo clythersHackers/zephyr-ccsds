@@ -227,6 +227,15 @@ authorize and transport EP commands, and own persistent-storage policy. See
 [the Stage 4 profile](SDLS_STAGE4_KEY_MANAGEMENT.md) for exact encodings,
 bounds, lifecycle rules, and deliberate restrictions.
 
+The fixed Stage 5 profile adds bounded management of predefined SAs, 32-bit
+receive ARSN/window procedures, Read ARSN and SA Status replies, Alarm Flag
+Reset, and the standard four-octet Frame Security Report. Create/Delete SA and
+runtime channel-association changes remain unsupported. When enabled, secured
+TM frames carry CLCW and FSR OCF values in a completion-driven 1:1 sequence,
+starting with CLCW. See
+[the Stage 5 profile](SDLS_STAGE5_SA_MANAGEMENT_FSR.md) for the exact wire
+forms, lifecycle, transaction, monitoring, and alternation rules.
+
 For UDP, allocate one `struct ccsds_udp` per endpoint and provide local/peer
 IPv4 addresses, ports, maximum unit length, receive callback, thread priority,
 and optional thread name. `ccsds_udp_init()` copies the configuration but not

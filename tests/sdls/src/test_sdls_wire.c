@@ -246,6 +246,12 @@ ZTEST(sdls_wire, test_gmac_round_trip_and_tamper)
              CCSDS_SDLS_SA_OPERATIONAL, CCSDS_SDLS_KEY_ACTIVE);
     init_ctx(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, CCSDS_SDLS_MODE_GMAC,
              CCSDS_SDLS_SA_OPERATIONAL, CCSDS_SDLS_KEY_ACTIVE);
+    rx.fsr.alarm = true;
+    rx.fsr.bad_sequence = true;
+    rx.fsr.bad_mac = true;
+    rx.fsr.bad_sa = true;
+    rx.fsr.last_spi = 0x7777u;
+    rx.fsr.last_arsn_lsb = 0xffu;
     zassert_ok(protect(&tx, CCSDS_SDLS_SA_EP_REPLY_TX, auth, clear,
                        sizeof(clear), protected_data));
     zassert_mem_equal(protected_data + CCSDS_SDLS_SECURITY_HEADER_LEN, clear,
@@ -253,6 +259,12 @@ ZTEST(sdls_wire, test_gmac_round_trip_and_tamper)
     zassert_ok(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, auth,
                        protected_data, sizeof(protected_data), output));
     zassert_mem_equal(output, clear, sizeof(clear));
+    zassert_true(rx.fsr.alarm);
+    zassert_false(rx.fsr.bad_sequence);
+    zassert_false(rx.fsr.bad_mac);
+    zassert_false(rx.fsr.bad_sa);
+    zassert_equal(rx.fsr.last_spi, TEST_SPI);
+    zassert_equal(rx.fsr.last_arsn_lsb, 0u);
 
     init_ctx(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, CCSDS_SDLS_MODE_GMAC,
              CCSDS_SDLS_SA_OPERATIONAL, CCSDS_SDLS_KEY_ACTIVE);
@@ -261,6 +273,11 @@ ZTEST(sdls_wire, test_gmac_round_trip_and_tamper)
                           protected_data, sizeof(protected_data), output),
                   CCSDS_SDLS_ERR_AUTHENTICATION);
     zassert_false(rx.sas[0].rx_arsn_initialized);
+    zassert_true(rx.fsr.alarm);
+    zassert_true(rx.fsr.bad_mac);
+    zassert_false(rx.fsr.bad_sequence);
+    zassert_false(rx.fsr.bad_sa);
+    zassert_equal(rx.fsr.last_spi, TEST_SPI);
 }
 
 ZTEST(sdls_wire, test_monotonic_replay_window_allows_only_forward_gaps)
@@ -268,7 +285,7 @@ ZTEST(sdls_wire, test_monotonic_replay_window_allows_only_forward_gaps)
     struct ccsds_sdls_auth_header no_header = {0};
     struct ccsds_sdls_ctx tx;
     struct ccsds_sdls_ctx rx;
-    uint8_t frames[4][CCSDS_SDLS_PROTECTED_OVERHEAD + 1u];
+    uint8_t frames[5][CCSDS_SDLS_PROTECTED_OVERHEAD + 1u];
     uint8_t clear = 0x5au;
     uint8_t output;
 
@@ -293,9 +310,21 @@ ZTEST(sdls_wire, test_monotonic_replay_window_allows_only_forward_gaps)
     zassert_equal(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, no_header,
                           frames[2], sizeof(frames[2]), &output),
                   CCSDS_SDLS_ERR_REPLAY);
+    zassert_true(rx.fsr.alarm);
+    zassert_true(rx.fsr.bad_sequence);
+    zassert_equal(rx.fsr.last_spi, TEST_SPI);
     zassert_equal(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, no_header,
                           frames[1], sizeof(frames[1]), &output),
                   CCSDS_SDLS_ERR_REPLAY);
+
+    rx.sas[0].rx_window = 1u;
+    tx.keys[TEST_KEY_ID].tx_arsn = rx.sas[0].rx_arsn + 2u;
+    zassert_ok(protect(&tx, CCSDS_SDLS_SA_EP_REPLY_TX, no_header, &clear, 1u,
+                       frames[4]));
+    zassert_equal(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, no_header,
+                          frames[4], sizeof(frames[4]), &output),
+                  CCSDS_SDLS_ERR_REPLAY);
+    rx.sas[0].rx_window = CONFIG_CCSDS_SDLS_ARSN_WINDOW;
 
     tx.keys[TEST_KEY_ID].tx_arsn =
         rx.sas[0].rx_arsn + CONFIG_CCSDS_SDLS_ARSN_WINDOW + 1u;
@@ -342,6 +371,8 @@ ZTEST(sdls_wire, test_received_state_rejections)
     zassert_equal(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, no_header,
                           frame, sizeof(frame), &clear),
                   CCSDS_SDLS_ERR_SA_STATE);
+    zassert_true(rx.fsr.alarm);
+    zassert_true(rx.fsr.bad_sa);
     rx.sas[0].state = CCSDS_SDLS_SA_EXPIRED;
     zassert_equal(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, no_header,
                           frame, sizeof(frame), &clear),
@@ -362,6 +393,8 @@ ZTEST(sdls_wire, test_received_state_rejections)
     zassert_equal(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, no_header,
                           frame, sizeof(frame), &clear),
                   CCSDS_SDLS_ERR_UNKNOWN_SA);
+    zassert_true(rx.fsr.bad_sa);
+    zassert_equal(rx.fsr.last_spi, 0x7777u);
 }
 
 static void *sdls_wire_setup(void)

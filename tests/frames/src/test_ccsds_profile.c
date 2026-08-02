@@ -610,6 +610,46 @@ ZTEST(ccsds_profile, test_tc_dispatch_reassembles_segmented_packet)
     zassert_equal(stats.dispatch_failures, 0u);
 }
 
+ZTEST(ccsds_profile, test_tc_map_apid_service_route_precedes_apid_router)
+{
+    enum {
+        TEST_APID = 1u,
+        TEST_SERVICE_MAP = 63u,
+        TEST_OTHER_MAP = 7u,
+    };
+    struct ccsds_router router;
+    struct ccsds_profile_tc_rx profile;
+    struct packet_capture service_capture = {0};
+    struct packet_capture router_capture = {0};
+    uint8_t packet[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + 1u];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
+    size_t cltu_len;
+
+    build_tc_packet(packet, 1u, TEST_APID, 0x5au);
+    ccsds_router_init(&router);
+    zassert_ok(ccsds_router_register_apid(&router, TEST_APID,
+                                          capture_packet_handler,
+                                          &router_capture));
+    ccsds_profile_tc_rx_init(&profile, &router);
+    zassert_ok(ccsds_profile_tc_set_map_apid_handler(
+        &profile, TEST_SERVICE_MAP, TEST_APID, capture_packet_handler,
+        &service_capture));
+
+    build_tc_segment_cltu(CCSDS_TC_SEGMENT_UNSEGMENTED, TEST_SERVICE_MAP,
+                          packet, sizeof(packet), 0u, cltu, sizeof(cltu),
+                          &cltu_len);
+    zassert_ok(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len));
+    zassert_equal(service_capture.count, 1u);
+    zassert_equal(router_capture.count, 0u);
+
+    build_tc_segment_cltu(CCSDS_TC_SEGMENT_UNSEGMENTED, TEST_OTHER_MAP,
+                          packet, sizeof(packet), 1u, cltu, sizeof(cltu),
+                          &cltu_len);
+    zassert_ok(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len));
+    zassert_equal(service_capture.count, 1u);
+    zassert_equal(router_capture.count, 1u);
+}
+
 ZTEST(ccsds_profile, test_tc_dispatch_rejects_data_frame_during_lockout)
 {
     struct ccsds_router router;

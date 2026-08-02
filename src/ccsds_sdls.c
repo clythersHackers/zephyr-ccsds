@@ -37,6 +37,7 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
 
     memset(ctx, 0, sizeof(*ctx));
     ctx->tx_iv = CCSDS_SDLS_IV_SEED;
+    ctx->fsr_next = false;
 
     for (size_t i = 0u; i < key_count; i++) {
         uint16_t key_id = keys[i].key_id;
@@ -91,6 +92,7 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
                            : CCSDS_SDLS_KEY_SLOT_NONE;
         ctx->sas[sa_slot].state = (uint8_t)sas[i].state;
         ctx->sas[sa_slot].rx_arsn = sas[i].rx_arsn;
+        ctx->sas[sa_slot].rx_window = CONFIG_CCSDS_SDLS_ARSN_WINDOW;
         ctx->sas[sa_slot].rx_arsn_initialized = sas[i].rx_arsn_initialized;
         ctx->sas[sa_slot].configured = true;
     }
@@ -203,16 +205,71 @@ uint32_t ccsds_sdls_iv_arsn(const uint8_t iv[CCSDS_SDLS_IV_LEN])
     return sys_get_be32(iv + 8u);
 }
 
+void ccsds_sdls_fsr_encode(const struct ccsds_sdls_ctx *ctx,
+                           uint8_t out[CCSDS_SDLS_FSR_LEN])
+{
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(out != NULL, "SDLS FSR output is NULL");
+
+    out[0] = (CCSDS_SDLS_FSR_VERSION << 4) | (ctx->fsr.alarm ? BIT(3) : 0u) |
+             (ctx->fsr.bad_sequence ? BIT(2) : 0u) |
+             (ctx->fsr.bad_mac ? BIT(1) : 0u) | (ctx->fsr.bad_sa ? BIT(0) : 0u);
+    sys_put_be16(ctx->fsr.last_spi, out + 1u);
+    out[3] = ctx->fsr.last_arsn_lsb;
+}
+
+void ccsds_sdls_fsr_set_enabled(struct ccsds_sdls_ctx *ctx, bool enabled)
+{
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    ctx->fsr_enabled = enabled;
+}
+
+static int fsr_process_failure(struct ccsds_sdls_ctx *ctx, int error,
+                               uint16_t spi)
+{
+    bool monitored =
+        error == CCSDS_SDLS_ERR_AUTHENTICATION ||
+        error == CCSDS_SDLS_ERR_REPLAY || error == CCSDS_SDLS_ERR_UNKNOWN_SA ||
+        error == CCSDS_SDLS_ERR_SA_STATE || error == CCSDS_SDLS_ERR_KEY ||
+        error == CCSDS_SDLS_ERR_KEY_STATE;
+
+    if (!monitored) {
+        return error;
+    }
+    ctx->fsr.alarm = true;
+    ctx->fsr.last_spi = spi;
+    ctx->fsr.bad_sequence |= error == CCSDS_SDLS_ERR_REPLAY;
+    ctx->fsr.bad_mac |= error == CCSDS_SDLS_ERR_AUTHENTICATION;
+    ctx->fsr.bad_sa |= error == CCSDS_SDLS_ERR_UNKNOWN_SA ||
+                       error == CCSDS_SDLS_ERR_SA_STATE ||
+                       error == CCSDS_SDLS_ERR_KEY ||
+                       error == CCSDS_SDLS_ERR_KEY_STATE;
+    return error;
+}
+
+static void fsr_process_success(struct ccsds_sdls_ctx *ctx, uint16_t spi,
+                                uint32_t arsn)
+{
+    ctx->fsr.bad_sequence = false;
+    ctx->fsr.bad_mac = false;
+    ctx->fsr.bad_sa = false;
+    ctx->fsr.last_spi = spi;
+    ctx->fsr.last_arsn_lsb = (uint8_t)arsn;
+}
+
 static int operational_key(struct ccsds_sdls_ctx *ctx, int sa_slot,
                            enum ccsds_sdls_sa_role expected_role,
                            bool transmitting, struct ccsds_sdls_key **key)
 {
     struct ccsds_sdls_sa *sa = &ctx->sas[sa_slot];
+    enum ccsds_sdls_sa_role actual_role = ctx->sa_roles[sa_slot];
     bool expected_tx = expected_role == CCSDS_SDLS_SA_EP_REPLY_TX ||
                        expected_role == CCSDS_SDLS_SA_OPERATIONAL_TM_TX;
+    bool actual_tx = actual_role == CCSDS_SDLS_SA_EP_REPLY_TX ||
+                     actual_role == CCSDS_SDLS_SA_OPERATIONAL_TM_TX;
 
-    if (ctx->sa_roles[sa_slot] != expected_role ||
-        expected_tx != transmitting || sa->state != CCSDS_SDLS_SA_OPERATIONAL) {
+    if (actual_tx != expected_tx || expected_tx != transmitting ||
+        sa->state != CCSDS_SDLS_SA_OPERATIONAL) {
         return CCSDS_SDLS_ERR_SA_STATE;
     }
     if (sa->key_slot < CONFIG_CCSDS_SDLS_SESSION_KEY_BASE ||
@@ -371,6 +428,7 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     __ASSERT(protected_data != NULL, "SDLS protected input is NULL");
     __ASSERT(out != NULL, "SDLS clear output is NULL");
     ASSERT_AUTH_CONTRACT(auth);
+    ctx->authenticated_rx_valid = false;
 
     if (protected_len < CCSDS_SDLS_PROTECTED_OVERHEAD) {
         return CCSDS_SDLS_ERR_FORMAT;
@@ -391,12 +449,12 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     }
     if (header.spi > CONFIG_CCSDS_SDLS_MAX_SA ||
         !ctx->sas[header.spi - 1u].configured) {
-        return CCSDS_SDLS_ERR_UNKNOWN_SA;
+        return fsr_process_failure(ctx, CCSDS_SDLS_ERR_UNKNOWN_SA, header.spi);
     }
     index = (int)header.spi - 1;
     ret = operational_key(ctx, index, expected_role, false, &key);
     if (ret != 0) {
-        return ret;
+        return fsr_process_failure(ctx, ret, header.spi);
     }
     sa = &ctx->sas[index];
     gcm = ctx->sa_modes[index] == CCSDS_SDLS_MODE_GCM;
@@ -404,11 +462,11 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     arsn = ccsds_sdls_iv_arsn(header.iv);
     if (sa->rx_arsn_initialized) {
         if (arsn <= sa->rx_arsn) {
-            return CCSDS_SDLS_ERR_REPLAY;
+            return fsr_process_failure(ctx, CCSDS_SDLS_ERR_REPLAY, header.spi);
         }
         advance = arsn - sa->rx_arsn;
-        if (advance > CONFIG_CCSDS_SDLS_ARSN_WINDOW) {
-            return CCSDS_SDLS_ERR_REPLAY;
+        if (advance > sa->rx_window) {
+            return fsr_process_failure(ctx, CCSDS_SDLS_ERR_REPLAY, header.spi);
         }
     }
 
@@ -426,7 +484,8 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     if (status != PSA_SUCCESS) {
         memset(workspace.data, 0, workspace_len);
         return status == PSA_ERROR_INVALID_SIGNATURE
-                   ? CCSDS_SDLS_ERR_AUTHENTICATION
+                   ? fsr_process_failure(ctx, CCSDS_SDLS_ERR_AUTHENTICATION,
+                                         header.spi)
                    : CCSDS_SDLS_ERR_PSA;
     }
     if (plaintext_len != (gcm ? data_len : 0u)) {
@@ -437,6 +496,9 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     memmove(out, gcm ? plaintext : frame_data, data_len);
     sa->rx_arsn = arsn;
     sa->rx_arsn_initialized = true;
+    ctx->authenticated_rx_spi = header.spi;
+    ctx->authenticated_rx_valid = true;
+    fsr_process_success(ctx, header.spi, arsn);
     memset(workspace.data, 0, workspace_len);
     return 0;
 }

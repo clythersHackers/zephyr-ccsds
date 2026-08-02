@@ -56,6 +56,13 @@ extern "C" {
     (CCSDS_SDLS_EP_MAX_OTAR_KEYS * CCSDS_SDLS_EP_OTAR_BLOCK_LEN)
 #define CCSDS_SDLS_EP_WORKSPACE_MIN                                            \
     MAX(CCSDS_SDLS_EP_PLAINTEXT_MAX, CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX)
+#define CCSDS_SDLS_EP_MAX_ASSOCIATIONS CONFIG_CCSDS_SDLS_MAX_SA
+#define CCSDS_SDLS_EP_START_SA_PDU_MAX                                         \
+    (CCSDS_SDLS_EP_HEADER_LEN + 2u + 4u * CCSDS_SDLS_EP_MAX_ASSOCIATIONS)
+#define CCSDS_SDLS_EP_SA_REKEY_PDU_MAX (CCSDS_SDLS_EP_HEADER_LEN + 8u)
+#define CCSDS_SDLS_EP_SA_REPLY_PDU_MAX (CCSDS_SDLS_EP_HEADER_LEN + 6u)
+#define CCSDS_SDLS_FSR_LEN 4u
+#define CCSDS_SDLS_FSR_VERSION 4u
 
 /*
  * CCSDS 355.0-B-2 default authentication masks for the fixed TM and TC
@@ -101,6 +108,27 @@ enum ccsds_sdls_ep_procedure {
     CCSDS_SDLS_EP_KEY_VERIFICATION = 4,
 };
 
+enum ccsds_sdls_ep_service_group {
+    CCSDS_SDLS_EP_KEY_MANAGEMENT = 0,
+    CCSDS_SDLS_EP_SA_MANAGEMENT = 1,
+    CCSDS_SDLS_EP_SECURITY_MONITORING = 3,
+};
+
+enum ccsds_sdls_ep_sa_procedure {
+    CCSDS_SDLS_EP_READ_ARSN = 0,
+    CCSDS_SDLS_EP_SET_ARSN_WINDOW = 5,
+    CCSDS_SDLS_EP_REKEY_SA = 6,
+    CCSDS_SDLS_EP_EXPIRE_SA = 9,
+    CCSDS_SDLS_EP_SET_ARSN = 10,
+    CCSDS_SDLS_EP_START_SA = 11,
+    CCSDS_SDLS_EP_STOP_SA = 14,
+    CCSDS_SDLS_EP_SA_STATUS = 15,
+};
+
+enum ccsds_sdls_ep_monitoring_procedure {
+    CCSDS_SDLS_EP_ALARM_FLAG_RESET = 7,
+};
+
 enum ccsds_sdls_ep_type {
     CCSDS_SDLS_EP_COMMAND = 0,
     CCSDS_SDLS_EP_REPLY = 1,
@@ -142,8 +170,10 @@ struct ccsds_sdls_security_trailer {
 /** Mutable state for one predefined Security Association. */
 struct ccsds_sdls_sa {
     uint32_t rx_arsn;
+    uint32_t rx_window;
     uint8_t key_slot;
     uint8_t state;
+    uint8_t last_procedure;
     bool rx_arsn_initialized;
     bool configured;
 };
@@ -196,8 +226,55 @@ struct ccsds_sdls_workspace {
 struct ccsds_sdls_ep_pdu {
     const uint8_t *data;
     size_t data_len;
+    uint8_t service_group;
     uint8_t procedure;
     uint8_t type;
+};
+
+struct ccsds_sdls_ep_start_sa {
+    uint32_t associations[CCSDS_SDLS_EP_MAX_ASSOCIATIONS];
+    uint16_t spi;
+    size_t association_count;
+};
+
+struct ccsds_sdls_ep_sa_command {
+    uint16_t spi;
+};
+
+struct ccsds_sdls_ep_rekey_sa {
+    uint32_t rx_arsn;
+    uint16_t spi;
+    uint16_t key_id;
+    bool has_rx_arsn;
+};
+
+struct ccsds_sdls_ep_set_arsn {
+    uint32_t arsn;
+    uint16_t spi;
+};
+
+struct ccsds_sdls_ep_set_arsn_window {
+    uint32_t window;
+    uint16_t spi;
+};
+
+struct ccsds_sdls_ep_read_arsn_reply {
+    uint32_t arsn;
+    uint16_t spi;
+};
+
+struct ccsds_sdls_ep_sa_status_reply {
+    uint16_t spi;
+    uint8_t last_procedure;
+};
+
+struct ccsds_sdls_fsr {
+    uint16_t last_spi;
+    uint8_t last_arsn_lsb;
+    bool alarm;
+    bool bad_sequence;
+    bool bad_mac;
+    bool bad_sa;
 };
 
 /** Ciphertext-only OTAR representation; no plaintext keys are exposed. */
@@ -245,6 +322,12 @@ struct ccsds_sdls_ctx {
     uint8_t sa_roles[CONFIG_CCSDS_SDLS_MAX_SA];
     uint8_t sa_modes[CONFIG_CCSDS_SDLS_MAX_SA];
     uint64_t tx_iv;
+    struct ccsds_sdls_fsr fsr;
+    /* Internal handoff from frame security to synchronous packet dispatch. */
+    uint16_t authenticated_rx_spi;
+    bool fsr_enabled;
+    bool fsr_next;
+    bool authenticated_rx_valid;
 };
 
 #define CCSDS_SDLS_CONTEXT_STATIC_BYTES sizeof(struct ccsds_sdls_ctx)
@@ -348,6 +431,45 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
 
 int ccsds_sdls_ep_pdu_decode(const uint8_t *encoded, size_t encoded_len,
                              struct ccsds_sdls_ep_pdu *pdu);
+void ccsds_sdls_ep_start_sa_encode(const struct ccsds_sdls_ep_start_sa *command,
+                                   uint8_t *out, size_t out_capacity);
+int ccsds_sdls_ep_start_sa_decode(const uint8_t *encoded, size_t encoded_len,
+                                  struct ccsds_sdls_ep_start_sa *command);
+void ccsds_sdls_ep_sa_command_encode(
+    enum ccsds_sdls_ep_sa_procedure procedure,
+    const struct ccsds_sdls_ep_sa_command *command, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_sa_command_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    enum ccsds_sdls_ep_sa_procedure expected_procedure,
+    struct ccsds_sdls_ep_sa_command *command);
+void ccsds_sdls_ep_rekey_sa_encode(const struct ccsds_sdls_ep_rekey_sa *command,
+                                   uint8_t *out, size_t out_capacity);
+int ccsds_sdls_ep_rekey_sa_decode(const uint8_t *encoded, size_t encoded_len,
+                                  struct ccsds_sdls_ep_rekey_sa *command);
+void ccsds_sdls_ep_set_arsn_encode(const struct ccsds_sdls_ep_set_arsn *command,
+                                   uint8_t *out, size_t out_capacity);
+int ccsds_sdls_ep_set_arsn_decode(const uint8_t *encoded, size_t encoded_len,
+                                  struct ccsds_sdls_ep_set_arsn *command);
+void ccsds_sdls_ep_set_arsn_window_encode(
+    const struct ccsds_sdls_ep_set_arsn_window *command, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_set_arsn_window_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_set_arsn_window *command);
+void ccsds_sdls_ep_read_arsn_reply_encode(
+    const struct ccsds_sdls_ep_read_arsn_reply *reply, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_read_arsn_reply_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_read_arsn_reply *reply);
+void ccsds_sdls_ep_sa_status_reply_encode(
+    const struct ccsds_sdls_ep_sa_status_reply *reply, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_sa_status_reply_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_sa_status_reply *reply);
+void ccsds_sdls_ep_alarm_flag_reset_encode(uint8_t *out, size_t out_capacity);
 void ccsds_sdls_ep_otar_encode(const struct ccsds_sdls_ep_otar *otar,
                                uint8_t *out, size_t out_capacity);
 int ccsds_sdls_ep_otar_decode(const uint8_t *encoded, size_t encoded_len,
@@ -391,6 +513,48 @@ int ccsds_sdls_ep_check_key_verification(struct ccsds_sdls_ctx *ctx,
                                          size_t command_len,
                                          const uint8_t *reply, size_t reply_len,
                                          struct ccsds_sdls_workspace workspace);
+
+int ccsds_sdls_ep_process_start_sa(struct ccsds_sdls_ctx *ctx,
+                                   const uint8_t *encoded, size_t encoded_len);
+int ccsds_sdls_ep_process_stop_sa(struct ccsds_sdls_ctx *ctx,
+                                  const uint8_t *encoded, size_t encoded_len);
+int ccsds_sdls_ep_process_expire_sa(struct ccsds_sdls_ctx *ctx,
+                                    const uint8_t *encoded, size_t encoded_len);
+int ccsds_sdls_ep_process_rekey_sa(struct ccsds_sdls_ctx *ctx,
+                                   const uint8_t *encoded, size_t encoded_len);
+int ccsds_sdls_ep_process_set_arsn(struct ccsds_sdls_ctx *ctx,
+                                   const uint8_t *encoded, size_t encoded_len);
+int ccsds_sdls_ep_process_set_arsn_window(struct ccsds_sdls_ctx *ctx,
+                                          const uint8_t *encoded,
+                                          size_t encoded_len);
+int ccsds_sdls_ep_process_read_arsn(struct ccsds_sdls_ctx *ctx,
+                                    const uint8_t *encoded, size_t encoded_len,
+                                    uint8_t *reply, size_t reply_capacity,
+                                    size_t *reply_len);
+int ccsds_sdls_ep_process_sa_status(struct ccsds_sdls_ctx *ctx,
+                                    const uint8_t *encoded, size_t encoded_len,
+                                    uint8_t *reply, size_t reply_capacity,
+                                    size_t *reply_len);
+int ccsds_sdls_ep_process_alarm_flag_reset(struct ccsds_sdls_ctx *ctx,
+                                           const uint8_t *encoded,
+                                           size_t encoded_len);
+
+void ccsds_sdls_fsr_encode(const struct ccsds_sdls_ctx *ctx,
+                           uint8_t out[CCSDS_SDLS_FSR_LEN]);
+void ccsds_sdls_fsr_set_enabled(struct ccsds_sdls_ctx *ctx, bool enabled);
+
+/**
+ * Process one EP PDU delivered by the packet service as a single transaction.
+ *
+ * Only the packet payload crosses the EP service boundary. ProcessSecurity
+ * retains any carrying frame SPI/ARSN internally so the FSR indication can be
+ * committed after recipient success without exposing frame metadata to EP.
+ * Operational replay state consumed by ProcessSecurity remains independent.
+ */
+int ccsds_sdls_ep_process_pdu(
+    struct ccsds_sdls_ctx *ctx, const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_workspace workspace, uint8_t *reply,
+    size_t reply_capacity, size_t *reply_len);
 
 #ifdef __cplusplus
 }

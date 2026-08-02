@@ -27,16 +27,45 @@ static size_t pdu_size(size_t data_len)
     return CCSDS_SDLS_EP_HEADER_LEN + data_len;
 }
 
-static void encode_header(uint8_t type, uint8_t procedure, size_t data_len,
-                          uint8_t *out)
+static bool procedure_supported(uint8_t type, uint8_t service_group,
+                                uint8_t procedure)
+{
+    if (service_group == CCSDS_SDLS_EP_KEY_MANAGEMENT) {
+        return procedure >= CCSDS_SDLS_EP_OTAR &&
+               procedure <= CCSDS_SDLS_EP_KEY_VERIFICATION &&
+               (type == CCSDS_SDLS_EP_COMMAND ||
+                procedure == CCSDS_SDLS_EP_KEY_VERIFICATION);
+    }
+    if (service_group == CCSDS_SDLS_EP_SA_MANAGEMENT) {
+        bool known = procedure == CCSDS_SDLS_EP_READ_ARSN ||
+                     procedure == CCSDS_SDLS_EP_SET_ARSN_WINDOW ||
+                     procedure == CCSDS_SDLS_EP_REKEY_SA ||
+                     procedure == CCSDS_SDLS_EP_EXPIRE_SA ||
+                     procedure == CCSDS_SDLS_EP_SET_ARSN ||
+                     procedure == CCSDS_SDLS_EP_START_SA ||
+                     procedure == CCSDS_SDLS_EP_STOP_SA ||
+                     procedure == CCSDS_SDLS_EP_SA_STATUS;
+        bool reply = procedure == CCSDS_SDLS_EP_READ_ARSN ||
+                     procedure == CCSDS_SDLS_EP_SA_STATUS;
+
+        return known && (type == CCSDS_SDLS_EP_COMMAND ||
+                         (type == CCSDS_SDLS_EP_REPLY && reply));
+    }
+    return service_group == CCSDS_SDLS_EP_SECURITY_MONITORING &&
+           procedure == CCSDS_SDLS_EP_ALARM_FLAG_RESET &&
+           type == CCSDS_SDLS_EP_COMMAND;
+}
+
+static void encode_header(uint8_t type, uint8_t service_group,
+                          uint8_t procedure, size_t data_len, uint8_t *out)
 {
     __ASSERT(type <= CCSDS_SDLS_EP_REPLY, "invalid SDLS EP PDU type");
-    __ASSERT(procedure >= CCSDS_SDLS_EP_OTAR &&
-                 procedure <= CCSDS_SDLS_EP_KEY_VERIFICATION,
+    __ASSERT(procedure_supported(type, service_group, procedure),
              "invalid SDLS EP procedure");
     __ASSERT(data_len <= UINT16_MAX / 8u, "SDLS EP bit length overflows");
 
-    out[0] = (type == CCSDS_SDLS_EP_REPLY ? EP_TAG_REPLY : 0u) | procedure;
+    out[0] = (type == CCSDS_SDLS_EP_REPLY ? EP_TAG_REPLY : 0u) |
+             ((service_group << 4) & EP_TAG_SERVICE_MASK) | procedure;
     sys_put_be16((uint16_t)(data_len * 8u), out + 1u);
 }
 
@@ -47,6 +76,7 @@ int ccsds_sdls_ep_pdu_decode(const uint8_t *encoded, size_t encoded_len,
     uint16_t bit_len;
     uint8_t tag;
     uint8_t procedure;
+    uint8_t service_group;
     uint8_t type;
 
     __ASSERT(encoded != NULL, "SDLS EP input is NULL");
@@ -56,16 +86,14 @@ int ccsds_sdls_ep_pdu_decode(const uint8_t *encoded, size_t encoded_len,
         return CCSDS_SDLS_ERR_FORMAT;
     }
     tag = encoded[0];
-    if ((tag & (EP_TAG_USER | EP_TAG_SERVICE_MASK)) != 0u) {
+    if ((tag & EP_TAG_USER) != 0u) {
         return CCSDS_SDLS_ERR_UNSUPPORTED;
     }
+    service_group = (tag & EP_TAG_SERVICE_MASK) >> 4;
     procedure = tag & EP_TAG_PROCEDURE_MASK;
     type = (tag & EP_TAG_REPLY) != 0u ? CCSDS_SDLS_EP_REPLY
                                       : CCSDS_SDLS_EP_COMMAND;
-    if (procedure < CCSDS_SDLS_EP_OTAR ||
-        procedure > CCSDS_SDLS_EP_KEY_VERIFICATION ||
-        (type == CCSDS_SDLS_EP_REPLY &&
-         procedure != CCSDS_SDLS_EP_KEY_VERIFICATION)) {
+    if (!procedure_supported(type, service_group, procedure)) {
         return CCSDS_SDLS_ERR_UNSUPPORTED;
     }
 
@@ -85,6 +113,7 @@ int ccsds_sdls_ep_pdu_decode(const uint8_t *encoded, size_t encoded_len,
 
     pdu->data = encoded + CCSDS_SDLS_EP_HEADER_LEN;
     pdu->data_len = data_len;
+    pdu->service_group = service_group;
     pdu->procedure = procedure;
     pdu->type = type;
     return 0;
@@ -107,7 +136,8 @@ void ccsds_sdls_ep_otar_encode(const struct ccsds_sdls_ep_otar *otar,
     __ASSERT(out_capacity >= pdu_size(data_len),
              "SDLS EP OTAR output is too small");
 
-    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_OTAR, data_len, out);
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_KEY_MANAGEMENT,
+                  CCSDS_SDLS_EP_OTAR, data_len, out);
     sys_put_be16(otar->master_key_id, out + CCSDS_SDLS_EP_HEADER_LEN);
     offset = CCSDS_SDLS_EP_HEADER_LEN + 2u;
     memcpy(out + offset, otar->iv, CCSDS_SDLS_IV_LEN);
@@ -132,6 +162,7 @@ int ccsds_sdls_ep_otar_decode(const uint8_t *encoded, size_t encoded_len,
         return ret;
     }
     if (pdu.type != CCSDS_SDLS_EP_COMMAND ||
+        pdu.service_group != CCSDS_SDLS_EP_KEY_MANAGEMENT ||
         pdu.procedure != CCSDS_SDLS_EP_OTAR) {
         return CCSDS_SDLS_ERR_UNSUPPORTED;
     }
@@ -178,7 +209,8 @@ void ccsds_sdls_ep_key_command_encode(
     __ASSERT(out_capacity >= pdu_size(data_len),
              "SDLS EP key command output is too small");
 
-    encode_header(CCSDS_SDLS_EP_COMMAND, procedure, data_len, out);
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_KEY_MANAGEMENT,
+                  procedure, data_len, out);
     for (size_t i = 0u; i < command->key_count; i++) {
         sys_put_be16(command->key_ids[i],
                      out + CCSDS_SDLS_EP_HEADER_LEN + i * 2u);
@@ -203,6 +235,7 @@ int ccsds_sdls_ep_key_command_decode(
         return ret;
     }
     if (pdu.type != CCSDS_SDLS_EP_COMMAND ||
+        pdu.service_group != CCSDS_SDLS_EP_KEY_MANAGEMENT ||
         pdu.procedure != expected_procedure) {
         return CCSDS_SDLS_ERR_UNSUPPORTED;
     }
@@ -236,8 +269,8 @@ void ccsds_sdls_ep_verify_command_encode(
     __ASSERT(out_capacity >= pdu_size(data_len),
              "SDLS EP verification command output is too small");
 
-    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_KEY_VERIFICATION,
-                  data_len, out);
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_KEY_MANAGEMENT,
+                  CCSDS_SDLS_EP_KEY_VERIFICATION, data_len, out);
     for (size_t i = 0u; i < command->key_count; i++) {
         sys_put_be16(command->entries[i].key_id, out + offset);
         offset += 2u;
@@ -262,6 +295,7 @@ int ccsds_sdls_ep_verify_command_decode(
         return ret;
     }
     if (pdu.type != CCSDS_SDLS_EP_COMMAND ||
+        pdu.service_group != CCSDS_SDLS_EP_KEY_MANAGEMENT ||
         pdu.procedure != CCSDS_SDLS_EP_KEY_VERIFICATION) {
         return CCSDS_SDLS_ERR_UNSUPPORTED;
     }
@@ -300,8 +334,8 @@ void ccsds_sdls_ep_verify_reply_encode(
     __ASSERT(out_capacity >= pdu_size(data_len),
              "SDLS EP verification reply output is too small");
 
-    encode_header(CCSDS_SDLS_EP_REPLY, CCSDS_SDLS_EP_KEY_VERIFICATION, data_len,
-                  out);
+    encode_header(CCSDS_SDLS_EP_REPLY, CCSDS_SDLS_EP_KEY_MANAGEMENT,
+                  CCSDS_SDLS_EP_KEY_VERIFICATION, data_len, out);
     for (size_t i = 0u; i < reply->key_count; i++) {
         sys_put_be16(reply->entries[i].key_id, out + offset);
         offset += 2u;
@@ -330,6 +364,7 @@ int ccsds_sdls_ep_verify_reply_decode(const uint8_t *encoded,
         return ret;
     }
     if (pdu.type != CCSDS_SDLS_EP_REPLY ||
+        pdu.service_group != CCSDS_SDLS_EP_KEY_MANAGEMENT ||
         pdu.procedure != CCSDS_SDLS_EP_KEY_VERIFICATION) {
         return CCSDS_SDLS_ERR_UNSUPPORTED;
     }
@@ -354,6 +389,291 @@ int ccsds_sdls_ep_verify_reply_decode(const uint8_t *encoded,
     }
     reply->key_count = key_count;
     return 0;
+}
+
+static int decode_sa_pdu(const uint8_t *encoded, size_t encoded_len,
+                         uint8_t type, uint8_t procedure, size_t data_len,
+                         struct ccsds_sdls_ep_pdu *pdu)
+{
+    int ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, pdu);
+
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu->type != type ||
+        pdu->service_group != CCSDS_SDLS_EP_SA_MANAGEMENT ||
+        pdu->procedure != procedure) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    return pdu->data_len == data_len ? 0 : CCSDS_SDLS_ERR_FORMAT;
+}
+
+void ccsds_sdls_ep_start_sa_encode(const struct ccsds_sdls_ep_start_sa *command,
+                                   uint8_t *out, size_t out_capacity)
+{
+    size_t data_len;
+
+    __ASSERT(command != NULL, "SDLS EP Start SA command is NULL");
+    __ASSERT(out != NULL, "SDLS EP Start SA output is NULL");
+    __ASSERT(command->association_count <= CCSDS_SDLS_EP_MAX_ASSOCIATIONS,
+             "too many SDLS EP Start SA associations");
+    data_len = 2u + 4u * command->association_count;
+    __ASSERT(out_capacity >= pdu_size(data_len),
+             "SDLS EP Start SA output is too small");
+
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_SA_MANAGEMENT,
+                  CCSDS_SDLS_EP_START_SA, data_len, out);
+    sys_put_be16(command->spi, out + CCSDS_SDLS_EP_HEADER_LEN);
+    for (size_t i = 0u; i < command->association_count; i++) {
+        sys_put_be32(command->associations[i],
+                     out + CCSDS_SDLS_EP_HEADER_LEN + 2u + i * 4u);
+    }
+}
+
+int ccsds_sdls_ep_start_sa_decode(const uint8_t *encoded, size_t encoded_len,
+                                  struct ccsds_sdls_ep_start_sa *command)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    size_t count;
+    int ret;
+
+    __ASSERT(command != NULL, "SDLS EP Start SA output is NULL");
+    ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu.type != CCSDS_SDLS_EP_COMMAND ||
+        pdu.service_group != CCSDS_SDLS_EP_SA_MANAGEMENT ||
+        pdu.procedure != CCSDS_SDLS_EP_START_SA) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    if (pdu.data_len < 2u || (pdu.data_len - 2u) % 4u != 0u) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    count = (pdu.data_len - 2u) / 4u;
+    if (count > CCSDS_SDLS_EP_MAX_ASSOCIATIONS) {
+        return CCSDS_SDLS_ERR_CAPACITY;
+    }
+    command->spi = sys_get_be16(pdu.data);
+    for (size_t i = 0u; i < count; i++) {
+        command->associations[i] = sys_get_be32(pdu.data + 2u + i * 4u);
+    }
+    command->association_count = count;
+    return 0;
+}
+
+void ccsds_sdls_ep_sa_command_encode(
+    enum ccsds_sdls_ep_sa_procedure procedure,
+    const struct ccsds_sdls_ep_sa_command *command, uint8_t *out,
+    size_t out_capacity)
+{
+    __ASSERT(procedure == CCSDS_SDLS_EP_STOP_SA ||
+                 procedure == CCSDS_SDLS_EP_EXPIRE_SA ||
+                 procedure == CCSDS_SDLS_EP_READ_ARSN ||
+                 procedure == CCSDS_SDLS_EP_SA_STATUS,
+             "invalid simple SDLS EP SA procedure");
+    __ASSERT(command != NULL, "SDLS EP SA command is NULL");
+    __ASSERT(out != NULL, "SDLS EP SA command output is NULL");
+    __ASSERT(out_capacity >= pdu_size(2u),
+             "SDLS EP SA command output is too small");
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_SA_MANAGEMENT, procedure,
+                  2u, out);
+    sys_put_be16(command->spi, out + CCSDS_SDLS_EP_HEADER_LEN);
+}
+
+int ccsds_sdls_ep_sa_command_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    enum ccsds_sdls_ep_sa_procedure expected_procedure,
+    struct ccsds_sdls_ep_sa_command *command)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(command != NULL, "SDLS EP SA command output is NULL");
+    ret = decode_sa_pdu(encoded, encoded_len, CCSDS_SDLS_EP_COMMAND,
+                        expected_procedure, 2u, &pdu);
+    if (ret == 0) {
+        command->spi = sys_get_be16(pdu.data);
+    }
+    return ret;
+}
+
+void ccsds_sdls_ep_rekey_sa_encode(const struct ccsds_sdls_ep_rekey_sa *command,
+                                   uint8_t *out, size_t out_capacity)
+{
+    size_t data_len;
+
+    __ASSERT(command != NULL, "SDLS EP Rekey SA command is NULL");
+    __ASSERT(out != NULL, "SDLS EP Rekey SA output is NULL");
+    data_len = command->has_rx_arsn ? 8u : 4u;
+    __ASSERT(out_capacity >= pdu_size(data_len),
+             "SDLS EP Rekey SA output is too small");
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_SA_MANAGEMENT,
+                  CCSDS_SDLS_EP_REKEY_SA, data_len, out);
+    sys_put_be16(command->spi, out + CCSDS_SDLS_EP_HEADER_LEN);
+    sys_put_be16(command->key_id, out + CCSDS_SDLS_EP_HEADER_LEN + 2u);
+    if (command->has_rx_arsn) {
+        sys_put_be32(command->rx_arsn, out + CCSDS_SDLS_EP_HEADER_LEN + 4u);
+    }
+}
+
+int ccsds_sdls_ep_rekey_sa_decode(const uint8_t *encoded, size_t encoded_len,
+                                  struct ccsds_sdls_ep_rekey_sa *command)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(command != NULL, "SDLS EP Rekey SA output is NULL");
+    ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu.type != CCSDS_SDLS_EP_COMMAND ||
+        pdu.service_group != CCSDS_SDLS_EP_SA_MANAGEMENT ||
+        pdu.procedure != CCSDS_SDLS_EP_REKEY_SA) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    if (pdu.data_len != 4u && pdu.data_len != 8u) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    command->spi = sys_get_be16(pdu.data);
+    command->key_id = sys_get_be16(pdu.data + 2u);
+    command->has_rx_arsn = pdu.data_len == 8u;
+    command->rx_arsn = command->has_rx_arsn ? sys_get_be32(pdu.data + 4u) : 0u;
+    return 0;
+}
+
+static void set_u32_encode(uint8_t procedure, uint16_t spi, uint32_t value,
+                           uint8_t *out, size_t out_capacity)
+{
+    __ASSERT(out != NULL, "SDLS EP integer output is NULL");
+    __ASSERT(out_capacity >= pdu_size(6u),
+             "SDLS EP integer output is too small");
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_SA_MANAGEMENT, procedure,
+                  6u, out);
+    sys_put_be16(spi, out + CCSDS_SDLS_EP_HEADER_LEN);
+    sys_put_be32(value, out + CCSDS_SDLS_EP_HEADER_LEN + 2u);
+}
+
+void ccsds_sdls_ep_set_arsn_encode(const struct ccsds_sdls_ep_set_arsn *command,
+                                   uint8_t *out, size_t out_capacity)
+{
+    __ASSERT(command != NULL, "SDLS EP Set ARSN command is NULL");
+    set_u32_encode(CCSDS_SDLS_EP_SET_ARSN, command->spi, command->arsn, out,
+                   out_capacity);
+}
+
+int ccsds_sdls_ep_set_arsn_decode(const uint8_t *encoded, size_t encoded_len,
+                                  struct ccsds_sdls_ep_set_arsn *command)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(command != NULL, "SDLS EP Set ARSN output is NULL");
+    ret = decode_sa_pdu(encoded, encoded_len, CCSDS_SDLS_EP_COMMAND,
+                        CCSDS_SDLS_EP_SET_ARSN, 6u, &pdu);
+    if (ret == 0) {
+        command->spi = sys_get_be16(pdu.data);
+        command->arsn = sys_get_be32(pdu.data + 2u);
+    }
+    return ret;
+}
+
+void ccsds_sdls_ep_set_arsn_window_encode(
+    const struct ccsds_sdls_ep_set_arsn_window *command, uint8_t *out,
+    size_t out_capacity)
+{
+    __ASSERT(command != NULL, "SDLS EP Set ARSN window command is NULL");
+    set_u32_encode(CCSDS_SDLS_EP_SET_ARSN_WINDOW, command->spi, command->window,
+                   out, out_capacity);
+}
+
+int ccsds_sdls_ep_set_arsn_window_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_set_arsn_window *command)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(command != NULL, "SDLS EP Set ARSN window output is NULL");
+    ret = decode_sa_pdu(encoded, encoded_len, CCSDS_SDLS_EP_COMMAND,
+                        CCSDS_SDLS_EP_SET_ARSN_WINDOW, 6u, &pdu);
+    if (ret == 0) {
+        command->spi = sys_get_be16(pdu.data);
+        command->window = sys_get_be32(pdu.data + 2u);
+    }
+    return ret;
+}
+
+void ccsds_sdls_ep_read_arsn_reply_encode(
+    const struct ccsds_sdls_ep_read_arsn_reply *reply, uint8_t *out,
+    size_t out_capacity)
+{
+    __ASSERT(reply != NULL, "SDLS EP Read ARSN reply is NULL");
+    __ASSERT(out != NULL, "SDLS EP Read ARSN reply output is NULL");
+    __ASSERT(out_capacity >= pdu_size(6u),
+             "SDLS EP Read ARSN reply output is too small");
+    encode_header(CCSDS_SDLS_EP_REPLY, CCSDS_SDLS_EP_SA_MANAGEMENT,
+                  CCSDS_SDLS_EP_READ_ARSN, 6u, out);
+    sys_put_be16(reply->spi, out + CCSDS_SDLS_EP_HEADER_LEN);
+    sys_put_be32(reply->arsn, out + CCSDS_SDLS_EP_HEADER_LEN + 2u);
+}
+
+int ccsds_sdls_ep_read_arsn_reply_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_read_arsn_reply *reply)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(reply != NULL, "SDLS EP Read ARSN reply output is NULL");
+    ret = decode_sa_pdu(encoded, encoded_len, CCSDS_SDLS_EP_REPLY,
+                        CCSDS_SDLS_EP_READ_ARSN, 6u, &pdu);
+    if (ret == 0) {
+        reply->spi = sys_get_be16(pdu.data);
+        reply->arsn = sys_get_be32(pdu.data + 2u);
+    }
+    return ret;
+}
+
+void ccsds_sdls_ep_sa_status_reply_encode(
+    const struct ccsds_sdls_ep_sa_status_reply *reply, uint8_t *out,
+    size_t out_capacity)
+{
+    __ASSERT(reply != NULL, "SDLS EP SA Status reply is NULL");
+    __ASSERT(out != NULL, "SDLS EP SA Status reply output is NULL");
+    __ASSERT(out_capacity >= pdu_size(3u),
+             "SDLS EP SA Status reply output is too small");
+    encode_header(CCSDS_SDLS_EP_REPLY, CCSDS_SDLS_EP_SA_MANAGEMENT,
+                  CCSDS_SDLS_EP_SA_STATUS, 3u, out);
+    sys_put_be16(reply->spi, out + CCSDS_SDLS_EP_HEADER_LEN);
+    out[CCSDS_SDLS_EP_HEADER_LEN + 2u] = reply->last_procedure;
+}
+
+int ccsds_sdls_ep_sa_status_reply_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_sa_status_reply *reply)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(reply != NULL, "SDLS EP SA Status reply output is NULL");
+    ret = decode_sa_pdu(encoded, encoded_len, CCSDS_SDLS_EP_REPLY,
+                        CCSDS_SDLS_EP_SA_STATUS, 3u, &pdu);
+    if (ret == 0) {
+        reply->spi = sys_get_be16(pdu.data);
+        reply->last_procedure = pdu.data[2];
+    }
+    return ret;
+}
+
+void ccsds_sdls_ep_alarm_flag_reset_encode(uint8_t *out, size_t out_capacity)
+{
+    __ASSERT(out != NULL, "SDLS EP Alarm Flag Reset output is NULL");
+    __ASSERT(out_capacity >= CCSDS_SDLS_EP_HEADER_LEN,
+             "SDLS EP Alarm Flag Reset output is too small");
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_SECURITY_MONITORING,
+                  CCSDS_SDLS_EP_ALARM_FLAG_RESET, 0u, out);
 }
 
 static int validate_key(psa_key_id_t key_id, psa_key_usage_t required_usage)
@@ -744,4 +1064,468 @@ out:
     wipe(seen, sizeof(seen));
     wipe(workspace.data, workspace.capacity);
     return ret;
+}
+
+static bool sa_role_is_rx(uint8_t role)
+{
+    return role == CCSDS_SDLS_SA_EP_COMMAND_RX ||
+           role == CCSDS_SDLS_SA_OPERATIONAL_TC_RX;
+}
+
+static bool sa_role_is_tx(uint8_t role)
+{
+    return role == CCSDS_SDLS_SA_EP_REPLY_TX ||
+           role == CCSDS_SDLS_SA_OPERATIONAL_TM_TX;
+}
+
+static int managed_sa(struct ccsds_sdls_ctx *ctx, uint16_t spi,
+                      struct ccsds_sdls_sa **sa, size_t *slot)
+{
+    if (spi == 0u || spi == UINT16_MAX ||
+        ccsds_sdls_sa_lookup(ctx, spi, sa) != 0) {
+        return CCSDS_SDLS_ERR_UNKNOWN_SA;
+    }
+    *slot = spi - 1u;
+    return 0;
+}
+
+static int validate_sa_key(struct ccsds_sdls_ctx *ctx, size_t slot,
+                           uint16_t key_id)
+{
+    struct ccsds_sdls_key *key;
+    bool tx = sa_role_is_tx(ctx->sa_roles[slot]);
+    psa_key_usage_t usage = tx ? PSA_KEY_USAGE_ENCRYPT : PSA_KEY_USAGE_DECRYPT;
+    int ret;
+
+    if (key_id < CONFIG_CCSDS_SDLS_SESSION_KEY_BASE ||
+        key_id >= CONFIG_CCSDS_SDLS_MAX_KEYS ||
+        ccsds_sdls_key_lookup(ctx, key_id, &key) != 0) {
+        return CCSDS_SDLS_ERR_KEY;
+    }
+    if (key->state != CCSDS_SDLS_KEY_ACTIVE) {
+        return CCSDS_SDLS_ERR_KEY_STATE;
+    }
+    ret = validate_key(key->psa_key_id, usage);
+    if (ret != 0) {
+        return ret;
+    }
+
+    for (size_t i = 0u; i < CONFIG_CCSDS_SDLS_MAX_SA; i++) {
+        if (i == slot || !ctx->sas[i].configured ||
+            ctx->sas[i].key_slot != key_id) {
+            continue;
+        }
+        if (sa_role_is_tx(ctx->sa_roles[i]) != tx ||
+            ctx->sa_modes[i] != ctx->sa_modes[slot]) {
+            return CCSDS_SDLS_ERR_KEY;
+        }
+    }
+    return 0;
+}
+
+int ccsds_sdls_ep_process_start_sa(struct ccsds_sdls_ctx *ctx,
+                                   const uint8_t *encoded, size_t encoded_len)
+{
+    struct ccsds_sdls_ep_start_sa command;
+    struct ccsds_sdls_sa *sa;
+    size_t slot;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Start SA input is NULL");
+    ret = ccsds_sdls_ep_start_sa_decode(encoded, encoded_len, &command);
+    if (ret != 0) {
+        return ret;
+    }
+    ret = managed_sa(ctx, command.spi, &sa, &slot);
+    if (ret != 0) {
+        return ret;
+    }
+    if (sa->state != CCSDS_SDLS_SA_STOPPED) {
+        return CCSDS_SDLS_ERR_SA_STATE;
+    }
+    ret = validate_sa_key(ctx, slot, sa->key_slot);
+    if (ret != 0) {
+        return ret;
+    }
+
+    sa->state = CCSDS_SDLS_SA_OPERATIONAL;
+    sa->last_procedure =
+        (CCSDS_SDLS_EP_SA_MANAGEMENT << 4) | CCSDS_SDLS_EP_START_SA;
+    return 0;
+}
+
+static int process_sa_transition(struct ccsds_sdls_ctx *ctx,
+                                 const uint8_t *encoded, size_t encoded_len,
+                                 enum ccsds_sdls_ep_sa_procedure procedure,
+                                 enum ccsds_sdls_sa_state from,
+                                 enum ccsds_sdls_sa_state to)
+{
+    struct ccsds_sdls_ep_sa_command command;
+    struct ccsds_sdls_sa *sa;
+    size_t slot;
+    int ret;
+
+    ret = ccsds_sdls_ep_sa_command_decode(encoded, encoded_len, procedure,
+                                          &command);
+    if (ret != 0) {
+        return ret;
+    }
+    ret = managed_sa(ctx, command.spi, &sa, &slot);
+    if (ret != 0) {
+        return ret;
+    }
+    ARG_UNUSED(slot);
+    if (sa->state != from) {
+        return CCSDS_SDLS_ERR_SA_STATE;
+    }
+    sa->state = to;
+    sa->last_procedure = (CCSDS_SDLS_EP_SA_MANAGEMENT << 4) | procedure;
+    return 0;
+}
+
+int ccsds_sdls_ep_process_stop_sa(struct ccsds_sdls_ctx *ctx,
+                                  const uint8_t *encoded, size_t encoded_len)
+{
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Stop SA input is NULL");
+    return process_sa_transition(
+        ctx, encoded, encoded_len, CCSDS_SDLS_EP_STOP_SA,
+        CCSDS_SDLS_SA_OPERATIONAL, CCSDS_SDLS_SA_STOPPED);
+}
+
+int ccsds_sdls_ep_process_expire_sa(struct ccsds_sdls_ctx *ctx,
+                                    const uint8_t *encoded, size_t encoded_len)
+{
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Expire SA input is NULL");
+    return process_sa_transition(ctx, encoded, encoded_len,
+                                 CCSDS_SDLS_EP_EXPIRE_SA, CCSDS_SDLS_SA_STOPPED,
+                                 CCSDS_SDLS_SA_EXPIRED);
+}
+
+int ccsds_sdls_ep_process_rekey_sa(struct ccsds_sdls_ctx *ctx,
+                                   const uint8_t *encoded, size_t encoded_len)
+{
+    struct ccsds_sdls_ep_rekey_sa command;
+    struct ccsds_sdls_sa *sa;
+    size_t slot;
+    bool rx;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Rekey SA input is NULL");
+    ret = ccsds_sdls_ep_rekey_sa_decode(encoded, encoded_len, &command);
+    if (ret != 0) {
+        return ret;
+    }
+    ret = managed_sa(ctx, command.spi, &sa, &slot);
+    if (ret != 0) {
+        return ret;
+    }
+    if (sa->state != CCSDS_SDLS_SA_EXPIRED) {
+        return CCSDS_SDLS_ERR_SA_STATE;
+    }
+    rx = sa_role_is_rx(ctx->sa_roles[slot]);
+    if (rx == !command.has_rx_arsn) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    ret = validate_sa_key(ctx, slot, command.key_id);
+    if (ret != 0) {
+        return ret;
+    }
+
+    sa->key_slot = (uint8_t)command.key_id;
+    if (rx) {
+        sa->rx_arsn = command.rx_arsn;
+        sa->rx_arsn_initialized = true;
+    }
+    sa->state = CCSDS_SDLS_SA_STOPPED;
+    sa->last_procedure =
+        (CCSDS_SDLS_EP_SA_MANAGEMENT << 4) | CCSDS_SDLS_EP_REKEY_SA;
+    return 0;
+}
+
+static int mutable_rx_sa(struct ccsds_sdls_ctx *ctx, uint16_t spi,
+                         struct ccsds_sdls_sa **sa, size_t *slot)
+{
+    int ret = managed_sa(ctx, spi, sa, slot);
+
+    if (ret != 0) {
+        return ret;
+    }
+    if (!sa_role_is_rx(ctx->sa_roles[*slot])) {
+        return CCSDS_SDLS_ERR_SA_STATE;
+    }
+    if ((*sa)->state == CCSDS_SDLS_SA_EXPIRED) {
+        return CCSDS_SDLS_ERR_SA_STATE;
+    }
+    return 0;
+}
+
+int ccsds_sdls_ep_process_set_arsn(struct ccsds_sdls_ctx *ctx,
+                                   const uint8_t *encoded, size_t encoded_len)
+{
+    struct ccsds_sdls_ep_set_arsn command;
+    struct ccsds_sdls_sa *sa;
+    size_t slot;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Set ARSN input is NULL");
+    ret = ccsds_sdls_ep_set_arsn_decode(encoded, encoded_len, &command);
+    if (ret != 0) {
+        return ret;
+    }
+    ret = mutable_rx_sa(ctx, command.spi, &sa, &slot);
+    if (ret != 0) {
+        return ret;
+    }
+    ARG_UNUSED(slot);
+    if (sa->rx_arsn_initialized && command.arsn < sa->rx_arsn) {
+        return CCSDS_SDLS_ERR_REPLAY;
+    }
+    sa->rx_arsn = command.arsn;
+    sa->rx_arsn_initialized = true;
+    sa->last_procedure =
+        (CCSDS_SDLS_EP_SA_MANAGEMENT << 4) | CCSDS_SDLS_EP_SET_ARSN;
+    return 0;
+}
+
+int ccsds_sdls_ep_process_set_arsn_window(struct ccsds_sdls_ctx *ctx,
+                                          const uint8_t *encoded,
+                                          size_t encoded_len)
+{
+    struct ccsds_sdls_ep_set_arsn_window command;
+    struct ccsds_sdls_sa *sa;
+    size_t slot;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Set ARSN window input is NULL");
+    ret = ccsds_sdls_ep_set_arsn_window_decode(encoded, encoded_len, &command);
+    if (ret != 0) {
+        return ret;
+    }
+    if (command.window == 0u ||
+        command.window > CONFIG_CCSDS_SDLS_ARSN_WINDOW) {
+        return CCSDS_SDLS_ERR_CAPACITY;
+    }
+    ret = mutable_rx_sa(ctx, command.spi, &sa, &slot);
+    if (ret != 0) {
+        return ret;
+    }
+    ARG_UNUSED(slot);
+    sa->rx_window = command.window;
+    sa->last_procedure =
+        (CCSDS_SDLS_EP_SA_MANAGEMENT << 4) | CCSDS_SDLS_EP_SET_ARSN_WINDOW;
+    return 0;
+}
+
+int ccsds_sdls_ep_process_read_arsn(struct ccsds_sdls_ctx *ctx,
+                                    const uint8_t *encoded, size_t encoded_len,
+                                    uint8_t *reply, size_t reply_capacity,
+                                    size_t *reply_len)
+{
+    struct ccsds_sdls_ep_read_arsn_reply response;
+    struct ccsds_sdls_ep_sa_command command;
+    struct ccsds_sdls_sa *sa;
+    uint8_t encoded_reply[CCSDS_SDLS_EP_SA_REPLY_PDU_MAX];
+    size_t slot;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Read ARSN input is NULL");
+    __ASSERT(reply != NULL, "SDLS EP Read ARSN reply is NULL");
+    __ASSERT(reply_len != NULL, "SDLS EP Read ARSN reply length is NULL");
+    __ASSERT(reply_capacity >= sizeof(encoded_reply),
+             "SDLS EP Read ARSN reply is too small");
+    ret = ccsds_sdls_ep_sa_command_decode(encoded, encoded_len,
+                                          CCSDS_SDLS_EP_READ_ARSN, &command);
+    if (ret != 0) {
+        return ret;
+    }
+    ret = mutable_rx_sa(ctx, command.spi, &sa, &slot);
+    if (ret != 0) {
+        return ret;
+    }
+    ARG_UNUSED(slot);
+    response.spi = command.spi;
+    response.arsn = sa->rx_arsn;
+    ccsds_sdls_ep_read_arsn_reply_encode(&response, encoded_reply,
+                                         sizeof(encoded_reply));
+    memcpy(reply, encoded_reply, sizeof(encoded_reply));
+    *reply_len = sizeof(encoded_reply);
+    return 0;
+}
+
+int ccsds_sdls_ep_process_sa_status(struct ccsds_sdls_ctx *ctx,
+                                    const uint8_t *encoded, size_t encoded_len,
+                                    uint8_t *reply, size_t reply_capacity,
+                                    size_t *reply_len)
+{
+    struct ccsds_sdls_ep_sa_status_reply response;
+    struct ccsds_sdls_ep_sa_command command;
+    struct ccsds_sdls_sa *sa;
+    uint8_t encoded_reply[CCSDS_SDLS_EP_HEADER_LEN + 3u];
+    size_t slot;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP SA Status input is NULL");
+    __ASSERT(reply != NULL, "SDLS EP SA Status reply is NULL");
+    __ASSERT(reply_len != NULL, "SDLS EP SA Status reply length is NULL");
+    __ASSERT(reply_capacity >= sizeof(encoded_reply),
+             "SDLS EP SA Status reply is too small");
+    ret = ccsds_sdls_ep_sa_command_decode(encoded, encoded_len,
+                                          CCSDS_SDLS_EP_SA_STATUS, &command);
+    if (ret != 0) {
+        return ret;
+    }
+    ret = managed_sa(ctx, command.spi, &sa, &slot);
+    if (ret != 0) {
+        return ret;
+    }
+    ARG_UNUSED(slot);
+    response.spi = command.spi;
+    response.last_procedure = sa->last_procedure;
+    ccsds_sdls_ep_sa_status_reply_encode(&response, encoded_reply,
+                                         sizeof(encoded_reply));
+    memcpy(reply, encoded_reply, sizeof(encoded_reply));
+    *reply_len = sizeof(encoded_reply);
+    return 0;
+}
+
+int ccsds_sdls_ep_process_alarm_flag_reset(struct ccsds_sdls_ctx *ctx,
+                                           const uint8_t *encoded,
+                                           size_t encoded_len)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Alarm Flag Reset input is NULL");
+    ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu.type != CCSDS_SDLS_EP_COMMAND ||
+        pdu.service_group != CCSDS_SDLS_EP_SECURITY_MONITORING ||
+        pdu.procedure != CCSDS_SDLS_EP_ALARM_FLAG_RESET) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    if (pdu.data_len != 0u) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    ctx->fsr.alarm = false;
+    ctx->fsr.bad_sequence = false;
+    ctx->fsr.bad_mac = false;
+    ctx->fsr.bad_sa = false;
+    return 0;
+}
+
+int ccsds_sdls_ep_process_pdu(
+    struct ccsds_sdls_ctx *ctx, const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_workspace workspace, uint8_t *reply,
+    size_t reply_capacity, size_t *reply_len)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    size_t committed_reply_len = 0u;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP packet payload is NULL");
+    __ASSERT(reply_len != NULL, "SDLS EP reply length is NULL");
+    ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+    if (ret != 0) {
+        return ret;
+    }
+
+    if (pdu.service_group == CCSDS_SDLS_EP_SA_MANAGEMENT &&
+        pdu.type == CCSDS_SDLS_EP_COMMAND && pdu.data_len >= 2u &&
+        pdu.procedure != CCSDS_SDLS_EP_READ_ARSN &&
+        pdu.procedure != CCSDS_SDLS_EP_SA_STATUS &&
+        ctx->authenticated_rx_valid &&
+        sys_get_be16(pdu.data) == ctx->authenticated_rx_spi) {
+        return CCSDS_SDLS_ERR_SA_STATE;
+    }
+
+    if (pdu.service_group == CCSDS_SDLS_EP_KEY_MANAGEMENT) {
+        switch (pdu.procedure) {
+        case CCSDS_SDLS_EP_OTAR:
+            ret = ccsds_sdls_ep_process_otar(ctx, encoded, encoded_len,
+                                             workspace);
+            break;
+        case CCSDS_SDLS_EP_KEY_ACTIVATION:
+            ret =
+                ccsds_sdls_ep_process_key_activation(ctx, encoded, encoded_len);
+            break;
+        case CCSDS_SDLS_EP_KEY_DEACTIVATION:
+            ret = ccsds_sdls_ep_process_key_deactivation(ctx, encoded,
+                                                         encoded_len);
+            break;
+        case CCSDS_SDLS_EP_KEY_VERIFICATION:
+            __ASSERT(reply != NULL, "SDLS EP verification reply is NULL");
+            ret = ccsds_sdls_ep_process_key_verification(
+                ctx, encoded, encoded_len, workspace, reply, reply_capacity);
+            if (ret == 0) {
+                committed_reply_len =
+                    CCSDS_SDLS_EP_HEADER_LEN +
+                    (pdu.data_len / CCSDS_SDLS_EP_VERIFY_COMMAND_ENTRY_LEN) *
+                        CCSDS_SDLS_EP_VERIFY_REPLY_ENTRY_LEN;
+            }
+            break;
+        default:
+            ret = CCSDS_SDLS_ERR_UNSUPPORTED;
+            break;
+        }
+    } else if (pdu.service_group == CCSDS_SDLS_EP_SA_MANAGEMENT) {
+        switch (pdu.procedure) {
+        case CCSDS_SDLS_EP_START_SA:
+            ret = ccsds_sdls_ep_process_start_sa(ctx, encoded, encoded_len);
+            break;
+        case CCSDS_SDLS_EP_STOP_SA:
+            ret = ccsds_sdls_ep_process_stop_sa(ctx, encoded, encoded_len);
+            break;
+        case CCSDS_SDLS_EP_REKEY_SA:
+            ret = ccsds_sdls_ep_process_rekey_sa(ctx, encoded, encoded_len);
+            break;
+        case CCSDS_SDLS_EP_EXPIRE_SA:
+            ret = ccsds_sdls_ep_process_expire_sa(ctx, encoded, encoded_len);
+            break;
+        case CCSDS_SDLS_EP_SET_ARSN:
+            ret = ccsds_sdls_ep_process_set_arsn(ctx, encoded, encoded_len);
+            break;
+        case CCSDS_SDLS_EP_SET_ARSN_WINDOW:
+            ret = ccsds_sdls_ep_process_set_arsn_window(ctx, encoded,
+                                                        encoded_len);
+            break;
+        case CCSDS_SDLS_EP_READ_ARSN:
+            __ASSERT(reply != NULL, "SDLS EP Read ARSN reply is NULL");
+            ret = ccsds_sdls_ep_process_read_arsn(ctx, encoded, encoded_len,
+                                                  reply, reply_capacity,
+                                                  &committed_reply_len);
+            break;
+        case CCSDS_SDLS_EP_SA_STATUS:
+            __ASSERT(reply != NULL, "SDLS EP SA Status reply is NULL");
+            ret = ccsds_sdls_ep_process_sa_status(ctx, encoded, encoded_len,
+                                                  reply, reply_capacity,
+                                                  &committed_reply_len);
+            break;
+        default:
+            ret = CCSDS_SDLS_ERR_UNSUPPORTED;
+            break;
+        }
+    } else if (pdu.service_group == CCSDS_SDLS_EP_SECURITY_MONITORING &&
+               pdu.procedure == CCSDS_SDLS_EP_ALARM_FLAG_RESET) {
+        ret = ccsds_sdls_ep_process_alarm_flag_reset(ctx, encoded, encoded_len);
+    } else {
+        ret = CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+
+    if (ret != 0) {
+        return ret;
+    }
+    *reply_len = committed_reply_len;
+    return 0;
 }

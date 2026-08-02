@@ -40,11 +40,24 @@ struct ccsds_profile_tc_reassembly {
     uint8_t buffer[CONFIG_CCSDS_TC_MAX_SPACE_PACKET_LEN];
 };
 
+/** Handler for a packet service selected by TC MAP ID and Space Packet APID. */
+typedef int (*ccsds_profile_map_apid_handler_t)(
+    const struct ccsds_space_packet *packet, void *user_data);
+
+struct ccsds_profile_map_apid_route {
+    ccsds_profile_map_apid_handler_t handler;
+    void *user_data;
+    uint16_t apid;
+    uint8_t map_id;
+    bool active;
+};
+
 struct ccsds_profile_tc_rx {
     struct ccsds_router *router;
     uint8_t accepted_vcid;
     struct ccsds_profile_tc_vc_state vc_state;
     struct ccsds_profile_tc_reassembly reassembly;
+    struct ccsds_profile_map_apid_route map_apid_route;
     uint8_t frame_buf[CONFIG_CCSDS_MAX_FRAME_LEN];
 #ifdef CONFIG_CCSDS_SDLS
     struct ccsds_sdls_ctx *sdls;
@@ -79,12 +92,26 @@ struct ccsds_profile_tc_rx_stats {
 void ccsds_profile_tc_rx_init(struct ccsds_profile_tc_rx *profile,
                               struct ccsds_router *router);
 
+/**
+ * @brief Register the packet service selected by one TC MAP ID/APID pair.
+ *
+ * This route is evaluated after TC frame security and packet extraction and
+ * before the APID-only router. It is intended for services such as SDLS EP
+ * that may be separated by hardware or software using the MAP ID.
+ *
+ * @return 0 on success, or -EINVAL for an invalid MAP ID or APID.
+ */
+int ccsds_profile_tc_set_map_apid_handler(
+    struct ccsds_profile_tc_rx *profile, uint8_t map_id, uint16_t apid,
+    ccsds_profile_map_apid_handler_t handler, void *user_data);
+
 #ifdef CONFIG_CCSDS_SDLS
 /**
  * @brief Require SDLS GMAC authentication on this TC receive profile.
  *
- * The SDLS context and its configured operational TC receive SA remain
- * caller-owned and must outlive the receive profile.
+ * The SDLS context and its configured TC receive SAs remain caller-owned and
+ * must outlive the receive profile. Each protected frame selects its SA by
+ * the SPI in the SDLS Security Header.
  *
  * @param profile Generic TC receive profile.
  * @param sdls Initialized SDLS context.

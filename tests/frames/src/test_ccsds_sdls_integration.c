@@ -10,6 +10,7 @@
 #include "ccsds/ccsds_crc16.h"
 #include "ccsds/ccsds_profile.h"
 #include "ccsds/ccsds_sdls.h"
+#include "ccsds/ccsds_tc_segment.h"
 #include "ccsds/ccsds_tm_frame.h"
 
 #define TEST_SPI 1u
@@ -45,6 +46,13 @@ static psa_key_id_t wrong_key;
 struct packet_capture {
     uint16_t apid;
     uint8_t count;
+};
+
+struct ep_service_capture {
+    struct ccsds_sdls_ctx *sdls;
+    uint8_t reply[CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX];
+    size_t reply_len;
+    uint8_t calls;
 };
 
 struct tm_capture {
@@ -116,20 +124,19 @@ static void build_tc_primary_header(uint8_t *frame, size_t frame_len,
     frame[4] = fsn;
 }
 
-static size_t build_secured_tc_frame(struct ccsds_sdls_ctx *tx, uint8_t *frame,
-                                     size_t frame_capacity)
+static size_t build_secured_tc_frame_data(struct ccsds_sdls_ctx *tx,
+                                          const uint8_t *clear_data,
+                                          size_t clear_data_len,
+                                          uint8_t *frame,
+                                          size_t frame_capacity)
 {
-    static const uint8_t clear_data[] = {
-        0xc0u, /* unsegmented TC Segment Header, MAP ID zero */
-        0x10u, 0x2au, 0xc0u, 0x00u, 0x00u, 0x00u, 0xa5u,
-    };
-    size_t frame_len = TEST_TC_PRIMARY_HDR_LEN + sizeof(clear_data) +
+    size_t frame_len = TEST_TC_PRIMARY_HDR_LEN + clear_data_len +
                        CCSDS_SDLS_PROTECTED_OVERHEAD;
     uint8_t scratch[128];
     struct ccsds_sdls_auth_header auth = {
         .data = frame,
         .mask = ccsds_sdls_tc_default_auth_mask,
-        .len = TEST_TC_PRIMARY_HDR_LEN,
+        .len = TEST_TC_PRIMARY_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN,
         .mask_len = CCSDS_SDLS_TC_DEFAULT_AUTH_MASK_LEN,
     };
     struct ccsds_sdls_workspace workspace = {
@@ -138,14 +145,31 @@ static size_t build_secured_tc_frame(struct ccsds_sdls_ctx *tx, uint8_t *frame,
     };
 
     zassert_true(frame_len <= frame_capacity);
+    zassert_true(clear_data_len >= CCSDS_TC_SEGMENT_HDR_LEN);
     memset(frame, 0, frame_len);
     build_tc_primary_header(frame, frame_len, 0u, 0u);
+    frame[TEST_TC_PRIMARY_HDR_LEN] = clear_data[0];
     zassert_ok(ccsds_sdls_apply_security(
-        tx, CCSDS_SDLS_SA_EP_REPLY_TX, TEST_SPI, auth, clear_data,
-        sizeof(clear_data), workspace, &frame[TEST_TC_PRIMARY_HDR_LEN],
-        frame_capacity - TEST_TC_PRIMARY_HDR_LEN));
+        tx, CCSDS_SDLS_SA_EP_REPLY_TX, TEST_SPI, auth,
+        clear_data + CCSDS_TC_SEGMENT_HDR_LEN,
+        clear_data_len - CCSDS_TC_SEGMENT_HDR_LEN, workspace,
+        &frame[TEST_TC_PRIMARY_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN],
+        frame_capacity - TEST_TC_PRIMARY_HDR_LEN -
+            CCSDS_TC_SEGMENT_HDR_LEN));
 
     return frame_len;
+}
+
+static size_t build_secured_tc_frame(struct ccsds_sdls_ctx *tx, uint8_t *frame,
+                                     size_t frame_capacity)
+{
+    static const uint8_t clear_data[] = {
+        0xc0u, /* unsegmented TC Segment Header, MAP ID zero */
+        0x10u, 0x2au, 0xc0u, 0x00u, 0x00u, 0x00u, 0xa5u,
+    };
+
+    return build_secured_tc_frame_data(tx, clear_data, sizeof(clear_data),
+                                       frame, frame_capacity);
 }
 
 static size_t build_tc_control_frame(uint8_t *frame, size_t frame_capacity,
@@ -222,6 +246,18 @@ static int capture_packet(const struct ccsds_space_packet *packet,
     return 0;
 }
 
+static int process_ep_packet(const struct ccsds_space_packet *packet,
+                             void *user_data)
+{
+    struct ep_service_capture *capture = user_data;
+    struct ccsds_sdls_workspace workspace = {0};
+
+    capture->calls++;
+    return ccsds_sdls_ep_process_pdu(
+        capture->sdls, packet->payload, packet->payload_len, workspace,
+        capture->reply, sizeof(capture->reply), &capture->reply_len);
+}
+
 static void init_tc_profile(struct ccsds_profile_tc_rx *profile,
                             struct ccsds_router *router,
                             struct packet_capture *capture,
@@ -284,7 +320,7 @@ ZTEST(ccsds_sdls_integration, test_secured_tc_gmac_delivery_and_rejections)
              CCSDS_SDLS_SA_OPERATIONAL, CCSDS_SDLS_KEY_ACTIVE, 0u, false);
     frame_len = build_secured_tc_frame(&tx, original, sizeof(original));
 
-    init_ctx(&rx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TC_RX,
+    init_ctx(&rx, good_key, CCSDS_SDLS_SA_EP_COMMAND_RX,
              CCSDS_SDLS_MODE_GMAC, CCSDS_SDLS_SA_OPERATIONAL,
              CCSDS_SDLS_KEY_ACTIVE, 0u, false);
     init_tc_profile(&profile, &router, &capture, &rx, 0u);
@@ -312,7 +348,16 @@ ZTEST(ccsds_sdls_integration, test_secured_tc_gmac_delivery_and_rejections)
     expect_tc_reject(frame, frame_len, &rx, 1u, CCSDS_SDLS_ERR_AUTHENTICATION);
 
     memcpy(frame, original, frame_len);
-    frame[TEST_TC_PRIMARY_HDR_LEN + CCSDS_SDLS_SECURITY_HEADER_LEN + 1u] ^=
+    frame[TEST_TC_PRIMARY_HDR_LEN] ^= 0x01u;
+    init_ctx(&rx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TC_RX,
+             CCSDS_SDLS_MODE_GMAC, CCSDS_SDLS_SA_OPERATIONAL,
+             CCSDS_SDLS_KEY_ACTIVE, 0u, false);
+    expect_tc_reject(frame, frame_len, &rx, 0u,
+                     CCSDS_SDLS_ERR_AUTHENTICATION);
+
+    memcpy(frame, original, frame_len);
+    frame[TEST_TC_PRIMARY_HDR_LEN + CCSDS_TC_SEGMENT_HDR_LEN +
+          CCSDS_SDLS_SECURITY_HEADER_LEN + 1u] ^=
         0x01u;
     init_ctx(&rx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TC_RX,
              CCSDS_SDLS_MODE_GMAC, CCSDS_SDLS_SA_OPERATIONAL,
@@ -336,7 +381,8 @@ ZTEST(ccsds_sdls_integration, test_secured_tc_gmac_delivery_and_rejections)
     expect_tc_reject(frame, frame_len, &rx, 0u, CCSDS_SDLS_ERR_REPLAY);
 
     memcpy(frame, original, frame_len);
-    sys_put_be16(2u, frame + TEST_TC_PRIMARY_HDR_LEN);
+    sys_put_be16(2u, frame + TEST_TC_PRIMARY_HDR_LEN +
+                         CCSDS_TC_SEGMENT_HDR_LEN);
     init_ctx(&rx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TC_RX,
              CCSDS_SDLS_MODE_GMAC, CCSDS_SDLS_SA_OPERATIONAL,
              CCSDS_SDLS_KEY_ACTIVE, 0u, false);
@@ -370,6 +416,118 @@ ZTEST(ccsds_sdls_integration, test_secured_tc_gmac_delivery_and_rejections)
              CCSDS_SDLS_MODE_GMAC, CCSDS_SDLS_SA_OPERATIONAL,
              CCSDS_SDLS_KEY_ACTIVE, 0u, false);
     expect_tc_reject(frame, frame_len, &rx, 0u, CCSDS_SDLS_ERR_FORMAT);
+}
+
+ZTEST(ccsds_sdls_integration, test_secured_tc_gcm_keeps_segment_header_clear)
+{
+    struct ccsds_sdls_ctx tx;
+    struct ccsds_sdls_ctx rx;
+    struct ccsds_profile_tc_rx profile;
+    struct ccsds_router router;
+    struct packet_capture capture = {0};
+    uint8_t frame[96];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
+    size_t frame_len;
+    size_t cltu_len;
+
+    init_ctx(&tx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TM_TX,
+             CCSDS_SDLS_MODE_GCM, CCSDS_SDLS_SA_OPERATIONAL,
+             CCSDS_SDLS_KEY_ACTIVE, 0u, false);
+    frame_len = build_secured_tc_frame(&tx, frame, sizeof(frame));
+
+    zassert_equal(frame[TEST_TC_PRIMARY_HDR_LEN], 0xc0u);
+    zassert_equal(sys_get_be16(frame + TEST_TC_PRIMARY_HDR_LEN +
+                              CCSDS_TC_SEGMENT_HDR_LEN),
+                  TEST_SPI);
+
+    init_ctx(&rx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TC_RX,
+             CCSDS_SDLS_MODE_GCM, CCSDS_SDLS_SA_OPERATIONAL,
+             CCSDS_SDLS_KEY_ACTIVE, 0u, false);
+    init_tc_profile(&profile, &router, &capture, &rx, 0u);
+    cltu_len = encode_cltu(frame, frame_len, cltu, sizeof(cltu));
+    zassert_ok(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len));
+    zassert_equal(capture.count, 1u);
+    zassert_equal(capture.apid, 0x2au);
+}
+
+ZTEST(ccsds_sdls_integration, test_ep_is_packet_service_after_frame_security)
+{
+    enum {
+        EP_MAP_ID = 63u,
+        EP_APID = 1u,
+        TARGET_SPI = 2u,
+    };
+    const struct ccsds_sdls_key_init key = {
+        .psa_key_id = good_key,
+        .key_id = TEST_KEY_ID,
+        .state = CCSDS_SDLS_KEY_ACTIVE,
+    };
+    const struct ccsds_sdls_sa_init rx_sas[] = {
+        {.spi = TEST_SPI,
+         .key_id = TEST_KEY_ID,
+         .role = CCSDS_SDLS_SA_EP_COMMAND_RX,
+         .mode = CCSDS_SDLS_MODE_GMAC,
+         .state = CCSDS_SDLS_SA_OPERATIONAL,
+         .has_key = true},
+        {.spi = TARGET_SPI,
+         .key_id = TEST_KEY_ID,
+         .role = CCSDS_SDLS_SA_OPERATIONAL_TC_RX,
+         .mode = CCSDS_SDLS_MODE_GMAC,
+         .state = CCSDS_SDLS_SA_STOPPED,
+         .has_key = true},
+    };
+    struct ccsds_sdls_ep_set_arsn_window command = {
+        .spi = TARGET_SPI,
+        .window = 7u,
+    };
+    struct ccsds_space_packet packet = {
+        .version = 0u,
+        .type = CCSDS_PACKET_TYPE_TC,
+        .secondary_header = false,
+        .apid = EP_APID,
+        .sequence_flags = CCSDS_SEQUENCE_UNSEGMENTED,
+        .sequence_count = 0u,
+    };
+    struct ccsds_sdls_ctx tx;
+    struct ccsds_sdls_ctx rx;
+    struct ccsds_profile_tc_rx profile;
+    struct ccsds_router router;
+    struct ep_service_capture capture = {.sdls = &rx};
+    uint8_t ep_pdu[CCSDS_SDLS_EP_HEADER_LEN + 6u];
+    uint8_t encoded_packet[64];
+    uint8_t clear_data[1u + sizeof(encoded_packet)];
+    uint8_t frame[128];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
+    size_t packet_len;
+    size_t frame_len;
+    size_t cltu_len;
+
+    init_ctx(&tx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TM_TX,
+             CCSDS_SDLS_MODE_GMAC, CCSDS_SDLS_SA_OPERATIONAL,
+             CCSDS_SDLS_KEY_ACTIVE, 0u, false);
+    ccsds_sdls_init(&rx, rx_sas, ARRAY_SIZE(rx_sas), &key, 1u);
+    ccsds_sdls_ep_set_arsn_window_encode(&command, ep_pdu, sizeof(ep_pdu));
+    packet.payload = ep_pdu;
+    packet.payload_len = sizeof(ep_pdu);
+    zassert_ok(ccsds_space_packet_encode(&packet, encoded_packet,
+                                         sizeof(encoded_packet), &packet_len));
+    clear_data[0] = 0xc0u | EP_MAP_ID;
+    memcpy(clear_data + 1u, encoded_packet, packet_len);
+    frame_len = build_secured_tc_frame_data(
+        &tx, clear_data, packet_len + 1u, frame, sizeof(frame));
+    cltu_len = encode_cltu(frame, frame_len, cltu, sizeof(cltu));
+
+    ccsds_router_init(&router);
+    ccsds_profile_tc_rx_init(&profile, &router);
+    ccsds_profile_tc_rx_set_sdls(&profile, &rx);
+    zassert_ok(ccsds_profile_tc_set_map_apid_handler(
+        &profile, EP_MAP_ID, EP_APID, process_ep_packet, &capture));
+
+    zassert_ok(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len));
+    zassert_equal(capture.calls, 1u);
+    zassert_equal(rx.sas[TARGET_SPI - 1u].rx_window, command.window);
+    zassert_equal(rx.fsr.last_spi, TEST_SPI);
+    zassert_equal(rx.fsr.last_arsn_lsb, 0u);
 }
 
 ZTEST(ccsds_sdls_integration, test_tc_type_bc_controls_bypass_sdls)
@@ -458,6 +616,13 @@ static int capture_tm(uint8_t vcid, const uint8_t *frame, size_t frame_len,
     memcpy(capture->frame, frame, frame_len);
     capture->len = frame_len;
     capture->calls++;
+    return 0;
+}
+
+static int stage5_clcw(uint32_t *clcw, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    *clcw = 0x010ffffau;
     return 0;
 }
 
@@ -562,6 +727,73 @@ ZTEST(ccsds_sdls_integration, test_secured_tm_gcm_round_trip_and_tampering)
     init_tm_rx(&rx, wrong_key);
     zassert_equal(process_tm(&rx, tm_frame, clear),
                   CCSDS_SDLS_ERR_AUTHENTICATION);
+}
+
+ZTEST(ccsds_sdls_integration, test_fsr_and_clcw_alternate_on_completed_frames)
+{
+    struct ccsds_sdls_ctx tx;
+    struct tm_capture capture = {0};
+    uint8_t observed[4][TEST_TM_OCF_LEN];
+    const size_t ocf_offset = TEST_TM_ASM_LEN + TEST_TM_FRAME_LEN -
+                              TEST_TM_FECF_LEN - TEST_TM_OCF_LEN;
+    static const uint8_t clcw[] = {0x01u, 0x0fu, 0xffu, 0xfau};
+    static const uint8_t fsr[] = {0x4au, 0x12u, 0x34u, 0x78u};
+
+    init_ctx(&tx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TM_TX,
+             CCSDS_SDLS_MODE_GCM, CCSDS_SDLS_SA_OPERATIONAL,
+             CCSDS_SDLS_KEY_ACTIVE, 0u, false);
+    tx.fsr.alarm = true;
+    tx.fsr.bad_mac = true;
+    tx.fsr.last_spi = 0x1234u;
+    tx.fsr.last_arsn_lsb = 0x78u;
+    ccsds_sdls_fsr_set_enabled(&tx, true);
+
+    ccsds_tm_frame_init();
+    ccsds_tm_frame_set_sdls(&tx, TEST_SPI);
+    ccsds_tm_frame_set_clcw_provider(stage5_clcw, NULL);
+    zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE, capture_tm,
+                                             &capture));
+    zassert_ok(ccsds_tm_frame_set_vc_route(7u, CCSDS_TM_ROUTE_ARCHIVE));
+
+    for (size_t i = 0u; i < ARRAY_SIZE(observed); i++) {
+        zassert_false(ccsds_tm_frame_test_run_cycle(NULL, NULL));
+        memcpy(observed[i], capture.frame + ocf_offset, TEST_TM_OCF_LEN);
+    }
+    zassert_mem_equal(observed[0], clcw, sizeof(clcw));
+    zassert_mem_equal(observed[1], fsr, sizeof(fsr));
+    zassert_mem_equal(observed[2], clcw, sizeof(clcw));
+    zassert_mem_equal(observed[3], fsr, sizeof(fsr));
+    zassert_false(tx.fsr_next);
+}
+
+ZTEST(ccsds_sdls_integration, test_failed_tm_security_does_not_advance_ocf)
+{
+    struct ccsds_sdls_ctx tx;
+    struct tm_capture capture = {0};
+    const size_t ocf_offset = TEST_TM_ASM_LEN + TEST_TM_FRAME_LEN -
+                              TEST_TM_FECF_LEN - TEST_TM_OCF_LEN;
+    static const uint8_t clcw[] = {0x01u, 0x0fu, 0xffu, 0xfau};
+
+    init_ctx(&tx, good_key, CCSDS_SDLS_SA_OPERATIONAL_TM_TX,
+             CCSDS_SDLS_MODE_GCM, CCSDS_SDLS_SA_STOPPED, CCSDS_SDLS_KEY_ACTIVE,
+             0u, false);
+    ccsds_sdls_fsr_set_enabled(&tx, true);
+    ccsds_tm_frame_init();
+    ccsds_tm_frame_set_sdls(&tx, TEST_SPI);
+    ccsds_tm_frame_set_clcw_provider(stage5_clcw, NULL);
+    zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE, capture_tm,
+                                             &capture));
+    zassert_ok(ccsds_tm_frame_set_vc_route(7u, CCSDS_TM_ROUTE_ARCHIVE));
+
+    zassert_false(ccsds_tm_frame_test_run_cycle(NULL, NULL));
+    zassert_equal(capture.calls, 0u);
+    zassert_false(tx.fsr_next);
+
+    tx.sas[TEST_SPI - 1u].state = CCSDS_SDLS_SA_OPERATIONAL;
+    zassert_false(ccsds_tm_frame_test_run_cycle(NULL, NULL));
+    zassert_equal(capture.calls, 1u);
+    zassert_mem_equal(capture.frame + ocf_offset, clcw, sizeof(clcw));
+    zassert_true(tx.fsr_next);
 }
 
 static void *integration_setup(void)

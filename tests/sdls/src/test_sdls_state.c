@@ -12,11 +12,11 @@ BUILD_ASSERT(CONFIG_CCSDS_SDLS_MAX_KEYS == 8,
              "footprint proof uses eight key slots");
 BUILD_ASSERT(CONFIG_CCSDS_SDLS_SESSION_KEY_BASE == 4,
              "lookup proof uses four master-key slots");
-BUILD_ASSERT(sizeof(struct ccsds_sdls_sa) == 8,
+BUILD_ASSERT(sizeof(struct ccsds_sdls_sa) == 16,
              "SDLS SA state footprint changed");
 BUILD_ASSERT(sizeof(struct ccsds_sdls_key) == 12,
              "SDLS key state footprint changed");
-BUILD_ASSERT(CCSDS_SDLS_CONTEXT_STATIC_BYTES == 144,
+BUILD_ASSERT(CCSDS_SDLS_CONTEXT_STATIC_BYTES == 192,
              "default SDLS context footprint changed");
 BUILD_ASSERT(offsetof(struct ccsds_sdls_ctx, keys) ==
                  sizeof(((struct ccsds_sdls_ctx *)0)->sas),
@@ -68,12 +68,15 @@ ZTEST(sdls_state, test_context_initialization_and_lookup)
     zassert_equal(sa->key_slot, 4u);
     zassert_true(sa->rx_arsn_initialized);
     zassert_equal(sa->rx_arsn, 42u);
+    zassert_equal(sa->rx_window, CONFIG_CCSDS_SDLS_ARSN_WINDOW);
     zassert_ok(ccsds_sdls_sa_lookup(&ctx, 2u, &sa));
     zassert_equal(sa->key_slot, CCSDS_SDLS_KEY_SLOT_NONE);
     zassert_ok(ccsds_sdls_key_lookup(&ctx, 5u, &key));
     zassert_equal(key->psa_key_id, 102u);
     zassert_equal(key->tx_arsn, 0u);
     zassert_equal(ctx.tx_iv, CCSDS_SDLS_IV_SEED);
+    zassert_false(ctx.fsr_enabled);
+    zassert_false(ctx.fsr_next);
 }
 
 ZTEST(sdls_state, test_unknown_identifiers)

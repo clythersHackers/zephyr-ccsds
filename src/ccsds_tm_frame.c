@@ -200,6 +200,13 @@ static void append_ocf(size_t ocf_offset)
 {
     uint32_t clcw;
 
+#ifdef CONFIG_CCSDS_SDLS
+    if (sdls_ctx != NULL && sdls_ctx->fsr_enabled && sdls_ctx->fsr_next) {
+        ccsds_sdls_fsr_encode(sdls_ctx, &frame_buf[ocf_offset]);
+        return;
+    }
+#endif
+
     if (clcw_provider.fn == NULL) {
         return;
     }
@@ -209,6 +216,15 @@ static void append_ocf(size_t ocf_offset)
     }
 
     sys_put_be32(clcw, &frame_buf[ocf_offset]);
+}
+
+static void complete_ocf(void)
+{
+#ifdef CONFIG_CCSDS_SDLS
+    if (sdls_ctx != NULL && sdls_ctx->fsr_enabled) {
+        sdls_ctx->fsr_next = !sdls_ctx->fsr_next;
+    }
+#endif
 }
 
 /* Advance master and selected virtual-channel frame counters after emit. */
@@ -329,6 +345,7 @@ static size_t build_idle_transfer_frame(uint8_t vcid)
     __ASSERT_NO_MSG(ocf_offset + CCSDS_TM_OCF_LEN + CCSDS_TM_FECF_LEN ==
                     CCSDS_TM_FRAME_LEN);
 
+    complete_ocf();
     increment_frame_counters(vcid);
 
     return CCSDS_TM_FRAME_LEN;
@@ -424,6 +441,7 @@ static int build_packet_transfer_frame(uint8_t vcid, size_t *frame_len)
     __ASSERT_NO_MSG(ocf_offset + CCSDS_TM_OCF_LEN + CCSDS_TM_FECF_LEN ==
                     CCSDS_TM_FRAME_LEN);
 
+    complete_ocf();
     increment_frame_counters(vcid);
     *frame_len = CCSDS_TM_FRAME_LEN;
     ret = 0;
