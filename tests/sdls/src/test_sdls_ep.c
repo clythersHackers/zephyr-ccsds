@@ -292,7 +292,14 @@ ZTEST(sdls_ep_otar, test_single_and_maximum_atomic_otar)
     zassert_not_equal(ctx.keys[4].psa_key_id, PSA_KEY_ID_NULL);
     zassert_equal(ctx.keys[4].state, CCSDS_SDLS_KEY_PREACTIVE);
     zassert_equal(ctx.keys[4].tx_arsn, 0u);
+    zassert_true(ctx.otar_master_allowed[4]);
     assert_zero(scratch, sizeof(scratch));
+
+    ctx.keys[4].state = CCSDS_SDLS_KEY_ACTIVE;
+    single[0] = 5u;
+    len = make_otar(ctx.keys[4].psa_key_id, 4u, single, 1u, 0x41u, pdu);
+    zassert_ok(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace));
+    zassert_not_equal(ctx.keys[5].psa_key_id, PSA_KEY_ID_NULL);
     destroy_ctx_sessions(&ctx);
 
     init_master_ctx(&ctx, master, PSA_KEY_ID_NULL, false, 0u);
@@ -320,6 +327,14 @@ ZTEST(sdls_ep_otar, test_tamper_wrong_master_duplicate_and_ineligible)
     size_t len = make_otar(master, 0u, ids, ARRAY_SIZE(ids), 0x30u, pdu);
 
     init_master_ctx(&ctx, master, wrong_master, false, 0u);
+    len = make_otar(wrong_master, 1u, ids, ARRAY_SIZE(ids), 0x2fu, pdu);
+    ccsds_sdls_set_otar_master_allowed(&ctx, 1u, false);
+    zassert_equal(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace),
+                  CCSDS_SDLS_ERR_KEY);
+    zassert_equal(ctx.keys[4].psa_key_id, PSA_KEY_ID_NULL);
+    ccsds_sdls_set_otar_master_allowed(&ctx, 1u, true);
+
+    len = make_otar(master, 0u, ids, ARRAY_SIZE(ids), 0x30u, pdu);
     memcpy(original, pdu, len);
     const size_t tamper_offsets[] = {17u, len - 1u, 5u};
     for (size_t i = 0u; i < ARRAY_SIZE(tamper_offsets); i++) {

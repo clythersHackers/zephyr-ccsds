@@ -191,6 +191,7 @@ enum ccsds_sdls_sa_role {
 enum ccsds_sdls_security_mode {
     CCSDS_SDLS_MODE_GMAC = 0,
     CCSDS_SDLS_MODE_GCM,
+    CCSDS_SDLS_MODE_CLEAR,
 };
 
 enum ccsds_sdls_key_state {
@@ -373,6 +374,7 @@ struct ccsds_sdls_ep_verify_reply {
 struct ccsds_sdls_ctx {
     struct ccsds_sdls_sa sas[CONFIG_CCSDS_SDLS_MAX_SA];
     struct ccsds_sdls_key keys[CONFIG_CCSDS_SDLS_MAX_KEYS];
+    bool otar_master_allowed[CONFIG_CCSDS_SDLS_MAX_KEYS];
     uint8_t sa_roles[CONFIG_CCSDS_SDLS_MAX_SA];
     uint8_t sa_modes[CONFIG_CCSDS_SDLS_MAX_SA];
     uint64_t tx_iv;
@@ -627,6 +629,9 @@ int ccsds_sdls_ep_process_alarm_flag_reset(struct ccsds_sdls_ctx *ctx,
 void ccsds_sdls_set_self_test(struct ccsds_sdls_ctx *ctx,
                               ccsds_sdls_self_test_cb_t callback,
                               void *user_data);
+/** Allow or deny one configured key as an OTAR authentication key. */
+void ccsds_sdls_set_otar_master_allowed(struct ccsds_sdls_ctx *ctx,
+                                        uint16_t key_id, bool allowed);
 void ccsds_sdls_event_record(struct ccsds_sdls_ctx *ctx, uint8_t tag,
                              enum ccsds_sdls_event_code code, uint16_t spi,
                              uint32_t arsn);

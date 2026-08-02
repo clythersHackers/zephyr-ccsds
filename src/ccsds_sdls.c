@@ -54,13 +54,16 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
 
         ctx->keys[key_id].psa_key_id = keys[i].psa_key_id;
         ctx->keys[key_id].state = (uint8_t)keys[i].state;
+        ctx->otar_master_allowed[key_id] = true;
     }
 
     for (size_t i = 0u; i < sa_count; i++) {
-        bool rx_role = sas[i].role == CCSDS_SDLS_SA_EP_COMMAND_RX ||
-                       sas[i].role == CCSDS_SDLS_SA_OPERATIONAL_TC_RX;
-        bool tx_role = sas[i].role == CCSDS_SDLS_SA_EP_REPLY_TX ||
-                       sas[i].role == CCSDS_SDLS_SA_OPERATIONAL_TM_TX;
+        __maybe_unused bool rx_role =
+            sas[i].role == CCSDS_SDLS_SA_EP_COMMAND_RX ||
+            sas[i].role == CCSDS_SDLS_SA_OPERATIONAL_TC_RX;
+        __maybe_unused bool tx_role =
+            sas[i].role == CCSDS_SDLS_SA_EP_REPLY_TX ||
+            sas[i].role == CCSDS_SDLS_SA_OPERATIONAL_TM_TX;
         uint16_t spi = sas[i].spi;
         size_t sa_slot;
 
@@ -69,8 +72,10 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
         sa_slot = spi - 1u;
         __ASSERT(!ctx->sas[sa_slot].configured, "duplicate SDLS SPI");
         __ASSERT(rx_role || tx_role, "invalid SDLS SA role");
+        __maybe_unused bool clear = sas[i].mode == CCSDS_SDLS_MODE_CLEAR;
+
         __ASSERT(sas[i].mode == CCSDS_SDLS_MODE_GMAC ||
-                     sas[i].mode == CCSDS_SDLS_MODE_GCM,
+                     sas[i].mode == CCSDS_SDLS_MODE_GCM || clear,
                  "invalid SDLS security mode");
         __ASSERT(sas[i].state >= CCSDS_SDLS_SA_STOPPED &&
                      sas[i].state <= CCSDS_SDLS_SA_EXPIRED,
@@ -79,10 +84,16 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
                  "TX SA has receive ARSN state");
         __ASSERT(sas[i].rx_arsn_initialized || sas[i].rx_arsn == 0u,
                  "uninitialized receive ARSN is nonzero");
+        __ASSERT(!clear || !sas[i].has_key, "clear SAs must be keyless");
+        __ASSERT(!clear || sas[i].role == CCSDS_SDLS_SA_OPERATIONAL_TC_RX ||
+                     sas[i].role == CCSDS_SDLS_SA_OPERATIONAL_TM_TX,
+                 "clear SAs require an operational traffic role");
+        __ASSERT(!clear || !sas[i].rx_arsn_initialized,
+                 "clear SA has receive ARSN state");
         if (sas[i].has_key) {
-            __ASSERT(sas[i].key_id >= CONFIG_CCSDS_SDLS_SESSION_KEY_BASE &&
+            __ASSERT(sas[i].key_id > 0u &&
                          sas[i].key_id < CONFIG_CCSDS_SDLS_MAX_KEYS,
-                     "SDLS SA must reference a session-key slot");
+                     "SDLS SA key is outside the traffic-key range");
         }
 
         ctx->sa_roles[sa_slot] = (uint8_t)sas[i].role;
@@ -96,6 +107,17 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
         ctx->sas[sa_slot].rx_arsn_initialized = sas[i].rx_arsn_initialized;
         ctx->sas[sa_slot].configured = true;
     }
+}
+
+void ccsds_sdls_set_otar_master_allowed(struct ccsds_sdls_ctx *ctx,
+                                        uint16_t key_id, bool allowed)
+{
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(key_id < CONFIG_CCSDS_SDLS_MAX_KEYS,
+             "OTAR master key is outside the configured range");
+    __ASSERT(ctx->keys[key_id].psa_key_id != PSA_KEY_ID_NULL,
+             "OTAR master key is not configured");
+    ctx->otar_master_allowed[key_id] = allowed;
 }
 
 int ccsds_sdls_sa_lookup(struct ccsds_sdls_ctx *ctx, uint16_t spi,
@@ -300,8 +322,7 @@ static int operational_key(struct ccsds_sdls_ctx *ctx, int sa_slot,
         sa->state != CCSDS_SDLS_SA_OPERATIONAL) {
         return CCSDS_SDLS_ERR_SA_STATE;
     }
-    if (sa->key_slot < CONFIG_CCSDS_SDLS_SESSION_KEY_BASE ||
-        sa->key_slot >= CONFIG_CCSDS_SDLS_MAX_KEYS) {
+    if (sa->key_slot == 0u || sa->key_slot >= CONFIG_CCSDS_SDLS_MAX_KEYS) {
         return CCSDS_SDLS_ERR_KEY;
     }
 

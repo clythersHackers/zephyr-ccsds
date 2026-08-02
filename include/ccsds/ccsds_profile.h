@@ -44,6 +44,9 @@ struct ccsds_profile_tc_reassembly {
 typedef int (*ccsds_profile_map_apid_handler_t)(
     const struct ccsds_space_packet *packet, void *user_data);
 
+/** Persist or otherwise commit authenticated receive state before dispatch. */
+typedef int (*ccsds_profile_authenticated_rx_fn_t)(void *user_data);
+
 struct ccsds_profile_map_apid_route {
     ccsds_profile_map_apid_handler_t handler;
     void *user_data;
@@ -61,6 +64,11 @@ struct ccsds_profile_tc_rx {
     uint8_t frame_buf[CONFIG_CCSDS_MAX_FRAME_LEN];
 #ifdef CONFIG_CCSDS_SDLS
     struct ccsds_sdls_ctx *sdls;
+    uint8_t clear_map_id;
+    bool clear_map_configured;
+    bool clear_map_enabled;
+    ccsds_profile_authenticated_rx_fn_t authenticated_rx_fn;
+    void *authenticated_rx_user_data;
     uint8_t sdls_workspace[CONFIG_CCSDS_MAX_FRAME_LEN +
                            CCSDS_SDLS_SECURITY_HEADER_LEN];
 #endif
@@ -107,7 +115,7 @@ int ccsds_profile_tc_set_map_apid_handler(
 
 #ifdef CONFIG_CCSDS_SDLS
 /**
- * @brief Require SDLS GMAC authentication on this TC receive profile.
+ * @brief Require configured SDLS protection on this TC receive profile.
  *
  * The SDLS context and its configured TC receive SAs remain caller-owned and
  * must outlive the receive profile. Each protected frame selects its SA by
@@ -118,6 +126,20 @@ int ccsds_profile_tc_set_map_apid_handler(
  */
 void ccsds_profile_tc_rx_set_sdls(struct ccsds_profile_tc_rx *profile,
                                   struct ccsds_sdls_ctx *sdls);
+
+/**
+ * @brief Configure the dedicated clear Type-D TC MAP and its admission state.
+ *
+ * The application derives @p enabled from its predefined clear receive SA.
+ * Other MAPs continue through the configured protected SDLS receive path.
+ */
+int ccsds_profile_tc_set_clear_map(struct ccsds_profile_tc_rx *profile,
+                                   uint8_t map_id, bool enabled);
+
+/** Register a callback run after protected TC acceptance and before dispatch. */
+void ccsds_profile_tc_set_authenticated_rx_callback(
+    struct ccsds_profile_tc_rx *profile,
+    ccsds_profile_authenticated_rx_fn_t callback, void *user_data);
 #endif
 
 /**

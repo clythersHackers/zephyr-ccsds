@@ -79,6 +79,15 @@ void ccsds_tm_frame_init(void);
  * @param spi SPI of the operational TM transmit SA.
  */
 void ccsds_tm_frame_set_sdls(struct ccsds_sdls_ctx *sdls, uint16_t spi);
+
+/**
+ * @brief Select protected or clear processing for one TM virtual channel.
+ *
+ * Calling ccsds_tm_frame_set_sdls() first establishes the caller-owned SDLS
+ * context and default SPI. A nonzero @p spi selects a protected operational TM
+ * SA for @p vcid; zero selects clear frame generation for that VC.
+ */
+void ccsds_tm_frame_set_vc_sdls(uint8_t vcid, uint16_t spi);
 #endif
 
 /**

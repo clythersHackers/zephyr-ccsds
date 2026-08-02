@@ -8,6 +8,8 @@
 
 static psa_key_id_t sa_management_keys[4];
 
+static void transition_to_expired(struct ccsds_sdls_ctx *ctx, uint16_t spi);
+
 static psa_key_id_t import_key(uint8_t seed)
 {
     psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
@@ -60,9 +62,78 @@ static void init_sa_management_ctx(struct ccsds_sdls_ctx *ctx)
          .mode = CCSDS_SDLS_MODE_GCM,
          .state = CCSDS_SDLS_SA_OPERATIONAL,
          .has_key = true},
+        {.spi = 3u,
+         .role = CCSDS_SDLS_SA_OPERATIONAL_TC_RX,
+         .mode = CCSDS_SDLS_MODE_CLEAR,
+         .state = CCSDS_SDLS_SA_STOPPED,
+         .has_key = false},
     };
 
     ccsds_sdls_init(ctx, sas, ARRAY_SIZE(sas), keys, ARRAY_SIZE(keys));
+}
+
+ZTEST(sdls_sa_management, test_clear_sa_requires_different_authenticated_sa)
+{
+    struct ccsds_sdls_ctx ctx;
+    struct ccsds_sdls_ep_start_sa start = {.spi = 3u};
+    uint8_t wire[CCSDS_SDLS_EP_START_SA_PDU_MAX];
+    size_t reply_len = 0u;
+
+    init_sa_management_ctx(&ctx);
+    ccsds_sdls_ep_start_sa_encode(&start, wire, sizeof(wire));
+    zassert_equal(ccsds_sdls_ep_process_pdu(
+                      &ctx, wire, CCSDS_SDLS_EP_HEADER_LEN + 2u,
+                      (struct ccsds_sdls_workspace){0}, NULL, 0u, &reply_len),
+                  CCSDS_SDLS_ERR_AUTHENTICATION);
+
+    ctx.authenticated_rx_valid = true;
+    ctx.authenticated_rx_spi = 3u;
+    zassert_equal(ccsds_sdls_ep_process_pdu(
+                      &ctx, wire, CCSDS_SDLS_EP_HEADER_LEN + 2u,
+                      (struct ccsds_sdls_workspace){0}, NULL, 0u, &reply_len),
+                  CCSDS_SDLS_ERR_AUTHENTICATION);
+
+    ctx.authenticated_rx_valid = true;
+    ctx.authenticated_rx_spi = 1u;
+    zassert_ok(ccsds_sdls_ep_process_pdu(
+        &ctx, wire, CCSDS_SDLS_EP_HEADER_LEN + 2u,
+        (struct ccsds_sdls_workspace){0}, NULL, 0u, &reply_len));
+    zassert_equal(ctx.sas[2].state, CCSDS_SDLS_SA_OPERATIONAL);
+}
+
+ZTEST(sdls_sa_management,
+      test_preprovisioned_startup_key_can_start_but_not_rekey)
+{
+    const struct ccsds_sdls_key_init key = {
+        .psa_key_id = sa_management_keys[0],
+        .key_id = 1u,
+        .state = CCSDS_SDLS_KEY_ACTIVE,
+    };
+    const struct ccsds_sdls_sa_init sa = {
+        .spi = 1u,
+        .key_id = 1u,
+        .role = CCSDS_SDLS_SA_EP_REPLY_TX,
+        .mode = CCSDS_SDLS_MODE_GCM,
+        .state = CCSDS_SDLS_SA_STOPPED,
+        .has_key = true,
+    };
+    struct ccsds_sdls_ep_start_sa start = {.spi = 1u};
+    struct ccsds_sdls_ep_rekey_sa rekey = {
+        .spi = 1u,
+        .key_id = 1u,
+    };
+    struct ccsds_sdls_ctx ctx;
+    uint8_t wire[CCSDS_SDLS_EP_SA_REKEY_PDU_MAX];
+
+    ccsds_sdls_init(&ctx, &sa, 1u, &key, 1u);
+    ccsds_sdls_ep_start_sa_encode(&start, wire, sizeof(wire));
+    zassert_ok(ccsds_sdls_ep_process_start_sa(
+        &ctx, wire, CCSDS_SDLS_EP_HEADER_LEN + 2u));
+    transition_to_expired(&ctx, 1u);
+    ccsds_sdls_ep_rekey_sa_encode(&rekey, wire, sizeof(wire));
+    zassert_equal(ccsds_sdls_ep_process_rekey_sa(
+                      &ctx, wire, CCSDS_SDLS_EP_HEADER_LEN + 4u),
+                  CCSDS_SDLS_ERR_KEY);
 }
 
 ZTEST(sdls_sa_management, test_exact_sa_management_vectors)

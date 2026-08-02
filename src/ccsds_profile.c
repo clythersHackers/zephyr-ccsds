@@ -400,6 +400,29 @@ void ccsds_profile_tc_rx_set_sdls(struct ccsds_profile_tc_rx *profile,
 
     profile->sdls = sdls;
 }
+
+int ccsds_profile_tc_set_clear_map(struct ccsds_profile_tc_rx *profile,
+                                   uint8_t map_id, bool enabled)
+{
+    __ASSERT(profile != NULL, "TC profile is NULL");
+
+    if (map_id > CCSDS_TC_MAP_ID_MAX) {
+        return -EINVAL;
+    }
+    profile->clear_map_id = map_id;
+    profile->clear_map_configured = true;
+    profile->clear_map_enabled = enabled;
+    return 0;
+}
+
+void ccsds_profile_tc_set_authenticated_rx_callback(
+    struct ccsds_profile_tc_rx *profile,
+    ccsds_profile_authenticated_rx_fn_t callback, void *user_data)
+{
+    __ASSERT(profile != NULL, "TC profile is NULL");
+    profile->authenticated_rx_fn = callback;
+    profile->authenticated_rx_user_data = user_data;
+}
 #endif
 
 int ccsds_profile_tc_set_accepted_vcid(struct ccsds_profile_tc_rx *profile,
@@ -518,27 +541,47 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
             return -EINVAL;
         }
         segment_header = frame.data[0];
+        if (profile->clear_map_configured &&
+            (segment_header & CCSDS_TC_MAP_ID_MAX) == profile->clear_map_id) {
+            if (!profile->clear_map_enabled) {
+                ret = CCSDS_SDLS_ERR_SA_STATE;
+                set_tc_result_error(&result,
+                                    CCSDS_PROFILE_TC_CLTU_STAGE_SDLS, ret);
+                record_tc_result(&result, cltu_len, ret);
+                return ret;
+            }
+        } else {
+            ret = ccsds_sdls_process_security(
+                profile->sdls, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, auth,
+                frame.data + CCSDS_TC_SEGMENT_HDR_LEN,
+                frame.data_len - CCSDS_TC_SEGMENT_HDR_LEN, workspace,
+                profile->frame_buf, sizeof(profile->frame_buf));
+            if (ret != 0) {
+                set_tc_result_error(&result,
+                                    CCSDS_PROFILE_TC_CLTU_STAGE_SDLS, ret);
+                record_tc_result(&result, cltu_len, ret);
+                return ret;
+            }
+            if (profile->authenticated_rx_fn != NULL) {
+                ret = profile->authenticated_rx_fn(
+                    profile->authenticated_rx_user_data);
+                if (ret != 0) {
+                    set_tc_result_error(
+                        &result, CCSDS_PROFILE_TC_CLTU_STAGE_SDLS, ret);
+                    record_tc_result(&result, cltu_len, ret);
+                    return ret;
+                }
+            }
 
-        ret = ccsds_sdls_process_security(
-            profile->sdls, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, auth,
-            frame.data + CCSDS_TC_SEGMENT_HDR_LEN,
-            frame.data_len - CCSDS_TC_SEGMENT_HDR_LEN, workspace,
-            profile->frame_buf,
-            sizeof(profile->frame_buf));
-        if (ret != 0) {
-            set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_SDLS, ret);
-            record_tc_result(&result, cltu_len, ret);
-            return ret;
+            clear_segment_data_len =
+                frame.data_len - CCSDS_TC_SEGMENT_HDR_LEN -
+                CCSDS_SDLS_PROTECTED_OVERHEAD;
+            memmove(profile->frame_buf + CCSDS_TC_SEGMENT_HDR_LEN,
+                    profile->frame_buf, clear_segment_data_len);
+            profile->frame_buf[0] = segment_header;
+            frame.data = profile->frame_buf;
+            frame.data_len -= CCSDS_SDLS_PROTECTED_OVERHEAD;
         }
-
-        clear_segment_data_len =
-            frame.data_len - CCSDS_TC_SEGMENT_HDR_LEN -
-            CCSDS_SDLS_PROTECTED_OVERHEAD;
-        memmove(profile->frame_buf + CCSDS_TC_SEGMENT_HDR_LEN,
-                profile->frame_buf, clear_segment_data_len);
-        profile->frame_buf[0] = segment_header;
-        frame.data = profile->frame_buf;
-        frame.data_len -= CCSDS_SDLS_PROTECTED_OVERHEAD;
     }
 #endif
 

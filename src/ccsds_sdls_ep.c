@@ -881,7 +881,8 @@ int ccsds_sdls_ep_process_otar(struct ccsds_sdls_ctx *ctx,
     if (ret != 0) {
         goto out;
     }
-    if (otar.master_key_id >= CONFIG_CCSDS_SDLS_SESSION_KEY_BASE ||
+    if (otar.master_key_id >= CONFIG_CCSDS_SDLS_MAX_KEYS ||
+        !ctx->otar_master_allowed[otar.master_key_id] ||
         ccsds_sdls_key_lookup(ctx, otar.master_key_id, &master) != 0 ||
         master->state != CCSDS_SDLS_KEY_ACTIVE) {
         ret = CCSDS_SDLS_ERR_KEY;
@@ -955,6 +956,7 @@ int ccsds_sdls_ep_process_otar(struct ccsds_sdls_ctx *ctx,
         key->psa_key_id = imported[i];
         key->state = CCSDS_SDLS_KEY_PREACTIVE;
         key->tx_arsn = 0u;
+        ctx->otar_master_allowed[destinations[i]] = true;
         imported[i] = PSA_KEY_ID_NULL;
     }
     ret = 0;
@@ -1237,15 +1239,15 @@ static int managed_sa(struct ccsds_sdls_ctx *ctx, uint16_t spi,
 }
 
 static int validate_sa_key(struct ccsds_sdls_ctx *ctx, size_t slot,
-                           uint16_t key_id)
+                           uint16_t key_id, bool session_only)
 {
     struct ccsds_sdls_key *key;
     bool tx = sa_role_is_tx(ctx->sa_roles[slot]);
     psa_key_usage_t usage = tx ? PSA_KEY_USAGE_ENCRYPT : PSA_KEY_USAGE_DECRYPT;
     int ret;
 
-    if (key_id < CONFIG_CCSDS_SDLS_SESSION_KEY_BASE ||
-        key_id >= CONFIG_CCSDS_SDLS_MAX_KEYS ||
+    if (key_id == 0u || key_id >= CONFIG_CCSDS_SDLS_MAX_KEYS ||
+        (session_only && key_id < CONFIG_CCSDS_SDLS_SESSION_KEY_BASE) ||
         ccsds_sdls_key_lookup(ctx, key_id, &key) != 0) {
         return CCSDS_SDLS_ERR_KEY;
     }
@@ -1291,9 +1293,16 @@ int ccsds_sdls_ep_process_start_sa(struct ccsds_sdls_ctx *ctx,
     if (sa->state != CCSDS_SDLS_SA_STOPPED) {
         return CCSDS_SDLS_ERR_SA_STATE;
     }
-    ret = validate_sa_key(ctx, slot, sa->key_slot);
-    if (ret != 0) {
-        return ret;
+    if (ctx->sa_modes[slot] == CCSDS_SDLS_MODE_CLEAR) {
+        if (!ctx->authenticated_rx_valid ||
+            ctx->authenticated_rx_spi == command.spi) {
+            return CCSDS_SDLS_ERR_AUTHENTICATION;
+        }
+    } else {
+        ret = validate_sa_key(ctx, slot, sa->key_slot, false);
+        if (ret != 0) {
+            return ret;
+        }
     }
 
     sa->state = CCSDS_SDLS_SA_OPERATIONAL;
@@ -1373,11 +1382,14 @@ int ccsds_sdls_ep_process_rekey_sa(struct ccsds_sdls_ctx *ctx,
     if (sa->state != CCSDS_SDLS_SA_EXPIRED) {
         return CCSDS_SDLS_ERR_SA_STATE;
     }
+    if (ctx->sa_modes[slot] == CCSDS_SDLS_MODE_CLEAR) {
+        return CCSDS_SDLS_ERR_SA_STATE;
+    }
     rx = sa_role_is_rx(ctx->sa_roles[slot]);
     if (rx == !command.has_rx_arsn) {
         return CCSDS_SDLS_ERR_FORMAT;
     }
-    ret = validate_sa_key(ctx, slot, command.key_id);
+    ret = validate_sa_key(ctx, slot, command.key_id, true);
     if (ret != 0) {
         return ret;
     }
@@ -1402,6 +1414,9 @@ static int mutable_rx_sa(struct ccsds_sdls_ctx *ctx, uint16_t spi,
         return ret;
     }
     if (!sa_role_is_rx(ctx->sa_roles[*slot])) {
+        return CCSDS_SDLS_ERR_SA_STATE;
+    }
+    if (ctx->sa_modes[*slot] == CCSDS_SDLS_MODE_CLEAR) {
         return CCSDS_SDLS_ERR_SA_STATE;
     }
     if ((*sa)->state == CCSDS_SDLS_SA_EXPIRED) {

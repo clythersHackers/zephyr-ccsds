@@ -89,6 +89,9 @@ struct ccsds_tm_vc {
 
     uint8_t vcfc;
     ccsds_tm_route_mask_t route_mask;
+#ifdef CONFIG_CCSDS_SDLS
+    uint16_t sdls_spi;
+#endif
 };
 
 struct ccsds_tm_route {
@@ -118,7 +121,6 @@ static bool generator_last_cycle_active;
 static bool initialized;
 #ifdef CONFIG_CCSDS_SDLS
 static struct ccsds_sdls_ctx *sdls_ctx;
-static uint16_t sdls_spi;
 #endif
 
 static void route_frame(uint8_t vcid, const uint8_t *frame, size_t frame_len);
@@ -234,26 +236,35 @@ static void increment_frame_counters(uint8_t vcid)
     vcs[vcid].vcfc++;
 }
 
-static size_t security_overhead(void)
+#ifdef CONFIG_CCSDS_SDLS
+static bool security_enabled(uint8_t vcid)
+{
+    return sdls_ctx != NULL && vcs[vcid].sdls_spi != 0u;
+}
+#endif
+
+static size_t security_overhead(uint8_t vcid)
 {
 #ifdef CONFIG_CCSDS_SDLS
-    return sdls_ctx != NULL ? CCSDS_SDLS_PROTECTED_OVERHEAD : 0u;
+    return security_enabled(vcid) ? CCSDS_SDLS_PROTECTED_OVERHEAD : 0u;
 #else
+    ARG_UNUSED(vcid);
     return 0u;
 #endif
 }
 
-static size_t security_header_len(void)
+static size_t security_header_len(uint8_t vcid)
 {
 #ifdef CONFIG_CCSDS_SDLS
-    return sdls_ctx != NULL ? CCSDS_SDLS_SECURITY_HEADER_LEN : 0u;
+    return security_enabled(vcid) ? CCSDS_SDLS_SECURITY_HEADER_LEN : 0u;
 #else
+    ARG_UNUSED(vcid);
     return 0u;
 #endif
 }
 
 #ifdef CONFIG_CCSDS_SDLS
-static int apply_security(void)
+static int apply_security(uint8_t vcid)
 {
     size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
                       CCSDS_SDLS_PROTECTED_OVERHEAD - CCSDS_TM_OCF_LEN -
@@ -270,7 +281,7 @@ static int apply_security(void)
     };
 
     return ccsds_sdls_apply_security(
-        sdls_ctx, CCSDS_SDLS_SA_OPERATIONAL_TM_TX, sdls_spi, auth,
+        sdls_ctx, CCSDS_SDLS_SA_OPERATIONAL_TM_TX, vcs[vcid].sdls_spi, auth,
         &frame_buf[CCSDS_TM_PRIMARY_HDR_LEN + CCSDS_SDLS_SECURITY_HEADER_LEN],
         data_len, workspace, &frame_buf[CCSDS_TM_PRIMARY_HDR_LEN],
         CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN);
@@ -327,15 +338,15 @@ static int read_pending_bytes(struct ccsds_tm_vc *vc, uint8_t *buf, size_t len)
 static size_t build_idle_transfer_frame(uint8_t vcid)
 {
     size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
-                      security_overhead() - CCSDS_TM_OCF_LEN -
+                      security_overhead(vcid) - CCSDS_TM_OCF_LEN -
                       CCSDS_TM_FECF_LEN;
     __maybe_unused size_t ocf_offset;
 
     memset(frame_buf, 0, CCSDS_TM_FRAME_LEN);
-    ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + security_overhead() + data_len;
+    ocf_offset = CCSDS_TM_PRIMARY_HDR_LEN + security_overhead(vcid) + data_len;
     build_primary_header(frame_buf, vcid, CCSDS_TM_IDLE_FIRST_HEADER_POINTER);
 #ifdef CONFIG_CCSDS_SDLS
-    if (sdls_ctx != NULL && apply_security() != 0) {
+    if (security_enabled(vcid) && apply_security(vcid) != 0) {
         return 0u;
     }
 #endif
@@ -364,12 +375,12 @@ static int build_packet_transfer_frame(uint8_t vcid, size_t *frame_len)
 {
     struct ccsds_tm_vc *vc = &vcs[vcid];
     size_t data_len = CCSDS_TM_FRAME_LEN - CCSDS_TM_PRIMARY_HDR_LEN -
-                      security_overhead() - CCSDS_TM_OCF_LEN -
+                      security_overhead(vcid) - CCSDS_TM_OCF_LEN -
                       CCSDS_TM_FECF_LEN;
     __maybe_unused size_t ocf_offset =
-        CCSDS_TM_PRIMARY_HDR_LEN + security_overhead() + data_len;
+        CCSDS_TM_PRIMARY_HDR_LEN + security_overhead(vcid) + data_len;
     uint8_t *data =
-        &frame_buf[CCSDS_TM_PRIMARY_HDR_LEN + security_header_len()];
+        &frame_buf[CCSDS_TM_PRIMARY_HDR_LEN + security_header_len(vcid)];
     size_t used = 0u;
     uint16_t first_header_pointer = CCSDS_TM_NO_FIRST_HEADER_POINTER;
     int ret;
@@ -428,8 +439,8 @@ static int build_packet_transfer_frame(uint8_t vcid, size_t *frame_len)
 
     build_primary_header(frame_buf, vcid, first_header_pointer);
 #ifdef CONFIG_CCSDS_SDLS
-    if (sdls_ctx != NULL) {
-        ret = apply_security();
+    if (security_enabled(vcid)) {
+        ret = apply_security(vcid);
         if (ret != 0) {
             goto out_unlock;
         }
@@ -626,7 +637,6 @@ void ccsds_tm_frame_init(void)
     memset(&clcw_provider, 0, sizeof(clcw_provider));
 #ifdef CONFIG_CCSDS_SDLS
     sdls_ctx = NULL;
-    sdls_spi = 0u;
 #endif
     memset(frame_buf, 0, sizeof(frame_buf));
     mcfc = 0u;
@@ -646,7 +656,20 @@ void ccsds_tm_frame_set_sdls(struct ccsds_sdls_ctx *sdls, uint16_t spi)
              "TM SDLS SPI is outside the configured range");
 
     sdls_ctx = sdls;
-    sdls_spi = spi;
+    for (size_t i = 0u; i < ARRAY_SIZE(vcs); i++) {
+        vcs[i].sdls_spi = spi;
+    }
+}
+
+void ccsds_tm_frame_set_vc_sdls(uint8_t vcid, uint16_t spi)
+{
+    __ASSERT(initialized, "ccsds_tm_frame_init() not called");
+    __ASSERT(sdls_ctx != NULL, "TM SDLS context is NULL");
+    __ASSERT(vcid < CCSDS_TM_VC_COUNT, "TM SDLS VCID is outside range");
+    __ASSERT(spi <= CONFIG_CCSDS_SDLS_MAX_SA,
+             "TM SDLS SPI is outside the configured range");
+
+    vcs[vcid].sdls_spi = spi;
 }
 #endif
 

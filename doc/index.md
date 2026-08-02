@@ -195,13 +195,19 @@ bytes.
 The configured SPI range is dense and one-based: wire SPI `1..MAX_SA` maps
 directly to SA slot `spi - 1`; reserved SPI zero is never used. Key IDs
 `0..MAX_KEYS-1` map directly to key slots. IDs below
-`CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` are master keys and IDs at or above it
-are session keys. Neither identifier nor key role is stored redundantly, and
-lookup performs no search. Unconfigured slots remain distinguishable from
-configured entries. A predefined SA may reference an empty session slot for
-later OTAR rollover, but remains unusable until that slot contains an Active
-key. Duplicate identifiers, malformed metadata, and capacity overflow are
-static configuration errors and assert.
+`CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` are pre-provisioned keys and
+IDs at or above it are session keys. Neither identifier nor key role is stored
+redundantly, and lookup performs no search. Unconfigured slots remain
+distinguishable from configured entries. A predefined SA may initially
+reference a pre-provisioned traffic key other than Key 0, or an empty session
+slot for later OTAR rollover. An empty association remains unusable until that
+slot contains an Active key. Every configured key, including a key previously
+delivered by OTAR, is eligible to authenticate a later OTAR by default; a
+consuming mission profile can narrow that set with
+`ccsds_sdls_set_otar_master_allowed()`. Rekey SA only accepts a session key,
+and OTAR can only populate empty session slots. Duplicate identifiers,
+malformed metadata, and capacity overflow are static configuration errors and
+assert.
 
 `ccsds_sdls_apply_security()` accepts a compact, optionally bit-masked
 transfer-frame header plus one clear data span. Only the mask prefix through
@@ -221,14 +227,26 @@ protected transmission resumes. See
 [the Stage 2 profile](SDLS_STAGE2_WIRE.md) for exact masking, anti-replay,
 reset policy, and footprint rules.
 
+An application may also predefine keyless SAs with
+`CCSDS_SDLS_MODE_CLEAR`. Clear SAs are limited to operational TC receive or TM
+transmit roles and do not pass through the authenticated wire codec. The TC
+profile can bind one MAP ID to a caller-controlled clear-admission state with
+`ccsds_profile_tc_set_clear_map()`; every other MAP remains protected. The TM
+generator can select a protected SPI or clear processing independently for
+each VC with `ccsds_tm_frame_set_vc_sdls()`. Applications must derive clear
+admission from the corresponding predefined SA state. Start SA refuses to
+start a clear SA unless the command arrived through a different authenticated
+SA, so a stopped clear channel cannot authorize itself.
+
 The supported Extended Procedure key-management profile uses the CCSDS
 355.1-B-1 Appendix D field sizes. PDU length fields count data-field bits, not
 octets. OTAR accepts AES-256 session keys only into empty predefined slots,
 then leaves them Pre-Activation until an authenticated Activation command.
 Verification returns an AES-GCM encrypted challenge proof without exposing key
 bytes. Multi-key OTAR and lifecycle commands are atomic, and cryptographic
-workspaces are wiped on every return path. Applications provision master keys,
-authorize and transport EP commands, and own persistent-storage policy. See
+workspaces are wiped on every return path. Applications provision initial
+trust keys, authorize and transport EP commands, and own persistent-storage
+policy. See
 [the Stage 4 profile](SDLS_STAGE4_KEY_MANAGEMENT.md) for exact encodings,
 bounds, lifecycle rules, and deliberate restrictions.
 
