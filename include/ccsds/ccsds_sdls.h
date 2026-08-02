@@ -61,6 +61,13 @@ extern "C" {
     (CCSDS_SDLS_EP_HEADER_LEN + 2u + 4u * CCSDS_SDLS_EP_MAX_ASSOCIATIONS)
 #define CCSDS_SDLS_EP_SA_REKEY_PDU_MAX (CCSDS_SDLS_EP_HEADER_LEN + 8u)
 #define CCSDS_SDLS_EP_SA_REPLY_PDU_MAX (CCSDS_SDLS_EP_HEADER_LEN + 6u)
+#define CCSDS_SDLS_EVENT_VALUE_LEN 7u
+#define CCSDS_SDLS_EVENT_WIRE_LEN (1u + 2u + CCSDS_SDLS_EVENT_VALUE_LEN)
+#define CCSDS_SDLS_EP_DUMP_LOG_PDU_MAX                                      \
+    (CCSDS_SDLS_EP_HEADER_LEN +                                             \
+     CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY * CCSDS_SDLS_EVENT_WIRE_LEN)
+#define CCSDS_SDLS_EP_REPLY_PDU_MAX                                         \
+    MAX(CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX, CCSDS_SDLS_EP_DUMP_LOG_PDU_MAX)
 #define CCSDS_SDLS_FSR_LEN 4u
 #define CCSDS_SDLS_FSR_VERSION 4u
 
@@ -126,8 +133,42 @@ enum ccsds_sdls_ep_sa_procedure {
 };
 
 enum ccsds_sdls_ep_monitoring_procedure {
+    CCSDS_SDLS_EP_PING = 1,
+    CCSDS_SDLS_EP_LOG_STATUS = 2,
+    CCSDS_SDLS_EP_DUMP_LOG = 3,
+    CCSDS_SDLS_EP_ERASE_LOG = 4,
+    CCSDS_SDLS_EP_SELF_TEST = 5,
     CCSDS_SDLS_EP_ALARM_FLAG_RESET = 7,
 };
+
+/* Stable, one-octet mission-profile values used in event-message values. */
+enum ccsds_sdls_event_code {
+    CCSDS_SDLS_EVENT_FORMAT = 1,
+    CCSDS_SDLS_EVENT_AUTHENTICATION = 2,
+    CCSDS_SDLS_EVENT_STALE_ARSN = 3,
+    CCSDS_SDLS_EVENT_ARSN_GAP = 4,
+    CCSDS_SDLS_EVENT_UNKNOWN_SA = 5,
+    CCSDS_SDLS_EVENT_SA_STATE = 6,
+    CCSDS_SDLS_EVENT_KEY_ID = 7,
+    CCSDS_SDLS_EVENT_KEY_STATE = 8,
+    CCSDS_SDLS_EVENT_KEY_TRANSITION = 9,
+    CCSDS_SDLS_EVENT_SA_TRANSITION = 10,
+    CCSDS_SDLS_EVENT_OTAR_AUTHENTICATION = 11,
+    CCSDS_SDLS_EVENT_SELF_TEST = 12,
+    CCSDS_SDLS_EVENT_PSA = 13,
+    CCSDS_SDLS_EVENT_UNSUPPORTED = 14,
+    CCSDS_SDLS_EVENT_CAPACITY = 15,
+};
+
+#define CCSDS_SDLS_EVENT_TAG_LOCAL 0xfeu
+#define CCSDS_SDLS_EVENT_TAG_UNAUTHENTICATED_FRAME 0xffu
+
+enum ccsds_sdls_self_test_result {
+    CCSDS_SDLS_SELF_TEST_OK = 0x00,
+    CCSDS_SDLS_SELF_TEST_NOT_OK = 0x80,
+};
+
+typedef int (*ccsds_sdls_self_test_cb_t)(void *user_data, uint8_t *result);
 
 enum ccsds_sdls_ep_type {
     CCSDS_SDLS_EP_COMMAND = 0,
@@ -277,6 +318,19 @@ struct ccsds_sdls_fsr {
     bool bad_sa;
 };
 
+/** Compact caller-owned host representation; not a wire structure. */
+struct ccsds_sdls_event {
+    uint8_t pdu_or_event_tag;
+    uint8_t event_code;
+    uint16_t spi;
+    uint32_t arsn;
+};
+
+struct ccsds_sdls_ep_log_status_reply {
+    uint16_t retained_events;
+    uint16_t remaining_slots;
+};
+
 /** Ciphertext-only OTAR representation; no plaintext keys are exposed. */
 struct ccsds_sdls_ep_otar {
     uint8_t encrypted_key_blocks[CCSDS_SDLS_EP_PLAINTEXT_MAX];
@@ -323,11 +377,21 @@ struct ccsds_sdls_ctx {
     uint8_t sa_modes[CONFIG_CCSDS_SDLS_MAX_SA];
     uint64_t tx_iv;
     struct ccsds_sdls_fsr fsr;
+    struct ccsds_sdls_event
+        events[CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY];
+    ccsds_sdls_self_test_cb_t self_test;
+    void *self_test_user_data;
     /* Internal handoff from frame security to synchronous packet dispatch. */
+    uint32_t authenticated_rx_arsn;
     uint16_t authenticated_rx_spi;
+    uint8_t event_read_index;
+    uint8_t event_write_index;
+    uint8_t event_count;
+    uint8_t event_overwrites;
     bool fsr_enabled;
     bool fsr_next;
     bool authenticated_rx_valid;
+    bool authenticated_rx_dispatching;
 };
 
 #define CCSDS_SDLS_CONTEXT_STATIC_BYTES sizeof(struct ccsds_sdls_ctx)
@@ -366,6 +430,15 @@ BUILD_ASSERT(CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX - CCSDS_SDLS_EP_HEADER_LEN <=
              "SDLS EP verification bit length must fit 16 bits");
 BUILD_ASSERT(CCSDS_SDLS_EP_MAX_OTAR_KEYS > 0u,
              "SDLS EP requires a session-key slot");
+BUILD_ASSERT(sizeof(struct ccsds_sdls_event) == 8u,
+             "SDLS compact event record must be eight octets");
+BUILD_ASSERT(CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY <= UINT8_MAX,
+             "SDLS event ring indices must fit one octet");
+BUILD_ASSERT(CCSDS_SDLS_EP_DUMP_LOG_PDU_MAX - CCSDS_SDLS_EP_HEADER_LEN <=
+                 UINT16_MAX / 8u,
+             "SDLS Dump Log bit length must fit 16 bits");
+BUILD_ASSERT(CCSDS_SDLS_EVENT_VALUE_LEN <= UINT16_MAX,
+             "SDLS event-message length must fit 16 bits");
 
 /**
  * Initialize fixed SDLS state.
@@ -470,6 +543,19 @@ int ccsds_sdls_ep_sa_status_reply_decode(
     const uint8_t *encoded, size_t encoded_len,
     struct ccsds_sdls_ep_sa_status_reply *reply);
 void ccsds_sdls_ep_alarm_flag_reset_encode(uint8_t *out, size_t out_capacity);
+void ccsds_sdls_ep_monitoring_command_encode(
+    enum ccsds_sdls_ep_monitoring_procedure procedure, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_log_status_reply_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    enum ccsds_sdls_ep_monitoring_procedure procedure,
+    struct ccsds_sdls_ep_log_status_reply *reply);
+int ccsds_sdls_ep_dump_log_reply_encode(const struct ccsds_sdls_ctx *ctx,
+                                        uint8_t *out, size_t out_capacity,
+                                        size_t *out_len);
+int ccsds_sdls_ep_self_test_reply_decode(const uint8_t *encoded,
+                                         size_t encoded_len,
+                                         uint8_t *result);
 void ccsds_sdls_ep_otar_encode(const struct ccsds_sdls_ep_otar *otar,
                                uint8_t *out, size_t out_capacity);
 int ccsds_sdls_ep_otar_decode(const uint8_t *encoded, size_t encoded_len,
@@ -538,6 +624,12 @@ int ccsds_sdls_ep_process_sa_status(struct ccsds_sdls_ctx *ctx,
 int ccsds_sdls_ep_process_alarm_flag_reset(struct ccsds_sdls_ctx *ctx,
                                            const uint8_t *encoded,
                                            size_t encoded_len);
+void ccsds_sdls_set_self_test(struct ccsds_sdls_ctx *ctx,
+                              ccsds_sdls_self_test_cb_t callback,
+                              void *user_data);
+void ccsds_sdls_event_record(struct ccsds_sdls_ctx *ctx, uint8_t tag,
+                             enum ccsds_sdls_event_code code, uint16_t spi,
+                             uint32_t arsn);
 
 void ccsds_sdls_fsr_encode(const struct ccsds_sdls_ctx *ctx,
                            uint8_t out[CCSDS_SDLS_FSR_LEN]);

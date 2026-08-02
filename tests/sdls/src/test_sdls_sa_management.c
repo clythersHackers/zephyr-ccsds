@@ -6,7 +6,7 @@
 
 #include <ccsds/ccsds_sdls.h>
 
-static psa_key_id_t stage5_keys[4];
+static psa_key_id_t sa_management_keys[4];
 
 static psa_key_id_t import_key(uint8_t seed)
 {
@@ -29,19 +29,19 @@ static psa_key_id_t import_key(uint8_t seed)
     return key;
 }
 
-static void init_stage5_ctx(struct ccsds_sdls_ctx *ctx)
+static void init_sa_management_ctx(struct ccsds_sdls_ctx *ctx)
 {
     struct ccsds_sdls_key_init keys[] = {
-        {.psa_key_id = stage5_keys[0],
+        {.psa_key_id = sa_management_keys[0],
          .key_id = 4u,
          .state = CCSDS_SDLS_KEY_ACTIVE},
-        {.psa_key_id = stage5_keys[1],
+        {.psa_key_id = sa_management_keys[1],
          .key_id = 5u,
          .state = CCSDS_SDLS_KEY_ACTIVE},
-        {.psa_key_id = stage5_keys[2],
+        {.psa_key_id = sa_management_keys[2],
          .key_id = 6u,
          .state = CCSDS_SDLS_KEY_ACTIVE},
-        {.psa_key_id = stage5_keys[3],
+        {.psa_key_id = sa_management_keys[3],
          .key_id = 7u,
          .state = CCSDS_SDLS_KEY_ACTIVE},
     };
@@ -65,7 +65,7 @@ static void init_stage5_ctx(struct ccsds_sdls_ctx *ctx)
     ccsds_sdls_init(ctx, sas, ARRAY_SIZE(sas), keys, ARRAY_SIZE(keys));
 }
 
-ZTEST(sdls_stage5, test_exact_sa_management_vectors)
+ZTEST(sdls_sa_management, test_exact_sa_management_vectors)
 {
     struct ccsds_sdls_ep_start_sa start = {.spi = 2u};
     struct ccsds_sdls_ep_start_sa decoded_start;
@@ -126,7 +126,7 @@ ZTEST(sdls_stage5, test_exact_sa_management_vectors)
     zassert_mem_equal(wire, alarm, sizeof(alarm));
 }
 
-ZTEST(sdls_stage5, test_malformed_lengths_nested_unknown_and_trailing)
+ZTEST(sdls_sa_management, test_malformed_lengths_nested_unknown_and_trailing)
 {
     struct ccsds_sdls_ep_start_sa start;
     struct ccsds_sdls_ep_pdu pdu;
@@ -163,7 +163,7 @@ static void transition_to_expired(struct ccsds_sdls_ctx *ctx, uint16_t spi)
     zassert_ok(ccsds_sdls_ep_process_expire_sa(ctx, wire, sizeof(wire)));
 }
 
-ZTEST(sdls_stage5, test_rekey_tc_and_tm_without_reboot)
+ZTEST(sdls_sa_management, test_rekey_tc_and_tm_without_reboot)
 {
     struct ccsds_sdls_ctx ctx;
     struct ccsds_sdls_ep_rekey_sa rekey_rx = {
@@ -173,7 +173,7 @@ ZTEST(sdls_stage5, test_rekey_tc_and_tm_without_reboot)
     struct ccsds_sdls_ep_start_sa start;
     uint8_t wire[CCSDS_SDLS_EP_SA_REKEY_PDU_MAX];
 
-    init_stage5_ctx(&ctx);
+    init_sa_management_ctx(&ctx);
     ctx.keys[7].tx_arsn = 77u;
     transition_to_expired(&ctx, 1u);
     transition_to_expired(&ctx, 2u);
@@ -199,7 +199,8 @@ ZTEST(sdls_stage5, test_rekey_tc_and_tm_without_reboot)
     zassert_equal(ctx.sas[1].state, CCSDS_SDLS_SA_OPERATIONAL);
 }
 
-ZTEST(sdls_stage5, test_failed_rekey_is_atomic_and_create_delete_unsupported)
+ZTEST(sdls_sa_management,
+      test_failed_rekey_is_atomic_and_create_delete_unsupported)
 {
     struct ccsds_sdls_ctx ctx;
     struct ccsds_sdls_ctx before;
@@ -209,7 +210,7 @@ ZTEST(sdls_stage5, test_failed_rekey_is_atomic_and_create_delete_unsupported)
     uint8_t create[] = {0x11u, 0x00u, 0x10u, 0x00u, 0x03u};
     uint8_t delete_sa[] = {0x14u, 0x00u, 0x10u, 0x00u, 0x01u};
 
-    init_stage5_ctx(&ctx);
+    init_sa_management_ctx(&ctx);
     transition_to_expired(&ctx, 1u);
     memcpy(&before, &ctx, sizeof(ctx));
     ccsds_sdls_ep_rekey_sa_encode(&rekey, wire, sizeof(wire));
@@ -224,7 +225,7 @@ ZTEST(sdls_stage5, test_failed_rekey_is_atomic_and_create_delete_unsupported)
     zassert_mem_equal(&ctx, &before, sizeof(ctx));
 }
 
-ZTEST(sdls_stage5, test_arsn_window_read_status_and_alarm_reset)
+ZTEST(sdls_sa_management, test_arsn_window_read_status_and_alarm_reset)
 {
     struct ccsds_sdls_ctx ctx;
     struct ccsds_sdls_ep_set_arsn set = {.spi = 1u, .arsn = 42u};
@@ -236,7 +237,7 @@ ZTEST(sdls_stage5, test_arsn_window_read_status_and_alarm_reset)
     uint8_t wire[16];
     uint8_t reply[CCSDS_SDLS_EP_SA_REPLY_PDU_MAX];
 
-    init_stage5_ctx(&ctx);
+    init_sa_management_ctx(&ctx);
     ccsds_sdls_ep_set_arsn_encode(&set, wire, sizeof(wire));
     zassert_ok(ccsds_sdls_ep_process_set_arsn(&ctx, wire, 9u));
     ccsds_sdls_ep_set_arsn_window_encode(&window, wire, sizeof(wire));
@@ -278,13 +279,13 @@ ZTEST(sdls_stage5, test_arsn_window_read_status_and_alarm_reset)
     zassert_equal(ctx.sas[0].rx_window, 3u);
 }
 
-ZTEST(sdls_stage5, test_fsr_exact_encoding)
+ZTEST(sdls_sa_management, test_fsr_exact_encoding)
 {
     struct ccsds_sdls_ctx ctx;
     uint8_t fsr[CCSDS_SDLS_FSR_LEN];
     static const uint8_t expected[] = {0x4fu, 0x12u, 0x34u, 0x78u};
 
-    init_stage5_ctx(&ctx);
+    init_sa_management_ctx(&ctx);
     ctx.fsr.alarm = true;
     ctx.fsr.bad_sequence = true;
     ctx.fsr.bad_mac = true;
@@ -299,7 +300,7 @@ ZTEST(sdls_stage5, test_fsr_exact_encoding)
     zassert_true(ctx.fsr_enabled);
 }
 
-ZTEST(sdls_stage5, test_packet_pdu_does_not_manage_frame_fsr)
+ZTEST(sdls_sa_management, test_packet_pdu_does_not_manage_frame_fsr)
 {
     struct ccsds_sdls_ctx ctx;
     struct ccsds_sdls_ep_set_arsn set = {.spi = 1u, .arsn = 42u};
@@ -307,7 +308,7 @@ ZTEST(sdls_stage5, test_packet_pdu_does_not_manage_frame_fsr)
     size_t reply_len = 77u;
     uint8_t wire[CCSDS_SDLS_EP_HEADER_LEN + 6u];
 
-    init_stage5_ctx(&ctx);
+    init_sa_management_ctx(&ctx);
     ctx.fsr.last_spi = 2u;
     ctx.fsr.last_arsn_lsb = 0x78u;
     ctx.authenticated_rx_spi = 2u;
@@ -335,35 +336,38 @@ ZTEST(sdls_stage5, test_packet_pdu_does_not_manage_frame_fsr)
     set.arsn = 43u;
     ccsds_sdls_ep_set_arsn_encode(&set, wire, sizeof(wire));
     ctx.authenticated_rx_spi = 1u;
-    zassert_equal(ccsds_sdls_ep_process_pdu(
-                      &ctx, wire, sizeof(wire), unused_workspace, NULL, 0u,
-                      &reply_len),
-                  CCSDS_SDLS_ERR_SA_STATE);
-    zassert_equal(ctx.sas[0].rx_arsn, 42u);
+    ctx.authenticated_rx_arsn = 99u;
+    ctx.authenticated_rx_valid = true;
+    zassert_ok(ccsds_sdls_ep_process_pdu(&ctx, wire, sizeof(wire),
+                                         unused_workspace, NULL, 0u,
+                                         &reply_len));
+    zassert_equal(ctx.sas[0].rx_arsn, 43u);
     zassert_equal(ctx.fsr.last_arsn_lsb, 0x78u);
+    zassert_false(ctx.authenticated_rx_valid);
 }
 
-static void *stage5_setup(void)
+static void *sa_management_setup(void)
 {
     zassert_equal(psa_crypto_init(), PSA_SUCCESS);
     return NULL;
 }
 
-static void stage5_before(void *fixture)
+static void sa_management_before(void *fixture)
 {
     ARG_UNUSED(fixture);
-    for (size_t i = 0u; i < ARRAY_SIZE(stage5_keys); i++) {
-        stage5_keys[i] = import_key((uint8_t)(0x20u * (i + 1u)));
+    for (size_t i = 0u; i < ARRAY_SIZE(sa_management_keys); i++) {
+        sa_management_keys[i] = import_key((uint8_t)(0x20u * (i + 1u)));
     }
 }
 
-static void stage5_after(void *fixture)
+static void sa_management_after(void *fixture)
 {
     ARG_UNUSED(fixture);
-    for (size_t i = 0u; i < ARRAY_SIZE(stage5_keys); i++) {
-        zassert_equal(psa_destroy_key(stage5_keys[i]), PSA_SUCCESS);
-        stage5_keys[i] = PSA_KEY_ID_NULL;
+    for (size_t i = 0u; i < ARRAY_SIZE(sa_management_keys); i++) {
+        zassert_equal(psa_destroy_key(sa_management_keys[i]), PSA_SUCCESS);
+        sa_management_keys[i] = PSA_KEY_ID_NULL;
     }
 }
 
-ZTEST_SUITE(sdls_stage5, NULL, stage5_setup, stage5_before, stage5_after, NULL);
+ZTEST_SUITE(sdls_sa_management, NULL, sa_management_setup,
+            sa_management_before, sa_management_after, NULL);

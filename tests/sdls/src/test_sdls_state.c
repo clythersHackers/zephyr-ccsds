@@ -16,7 +16,8 @@ BUILD_ASSERT(sizeof(struct ccsds_sdls_sa) == 16,
              "SDLS SA state footprint changed");
 BUILD_ASSERT(sizeof(struct ccsds_sdls_key) == 12,
              "SDLS key state footprint changed");
-BUILD_ASSERT(CCSDS_SDLS_CONTEXT_STATIC_BYTES == 192,
+BUILD_ASSERT(CCSDS_SDLS_CONTEXT_STATIC_BYTES ==
+                 192u + CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY * 8u + 16u,
              "default SDLS context footprint changed");
 BUILD_ASSERT(offsetof(struct ccsds_sdls_ctx, keys) ==
                  sizeof(((struct ccsds_sdls_ctx *)0)->sas),

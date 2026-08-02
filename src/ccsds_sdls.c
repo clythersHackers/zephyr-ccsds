@@ -224,8 +224,33 @@ void ccsds_sdls_fsr_set_enabled(struct ccsds_sdls_ctx *ctx, bool enabled)
     ctx->fsr_enabled = enabled;
 }
 
+static enum ccsds_sdls_event_code frame_event_code(int error)
+{
+    switch (error) {
+    case CCSDS_SDLS_ERR_FORMAT:
+        return CCSDS_SDLS_EVENT_FORMAT;
+    case CCSDS_SDLS_ERR_AUTHENTICATION:
+        return CCSDS_SDLS_EVENT_AUTHENTICATION;
+    case CCSDS_SDLS_ERR_REPLAY:
+        return CCSDS_SDLS_EVENT_STALE_ARSN;
+    case CCSDS_SDLS_ERR_UNKNOWN_SA:
+        return CCSDS_SDLS_EVENT_UNKNOWN_SA;
+    case CCSDS_SDLS_ERR_SA_STATE:
+        return CCSDS_SDLS_EVENT_SA_STATE;
+    case CCSDS_SDLS_ERR_KEY:
+        return CCSDS_SDLS_EVENT_KEY_ID;
+    case CCSDS_SDLS_ERR_KEY_STATE:
+        return CCSDS_SDLS_EVENT_KEY_STATE;
+    case CCSDS_SDLS_ERR_PSA:
+        return CCSDS_SDLS_EVENT_PSA;
+    default:
+        return CCSDS_SDLS_EVENT_FORMAT;
+    }
+}
+
 static int fsr_process_failure(struct ccsds_sdls_ctx *ctx, int error,
-                               uint16_t spi)
+                               uint16_t spi, uint32_t arsn,
+                               enum ccsds_sdls_event_code event_code)
 {
     bool monitored =
         error == CCSDS_SDLS_ERR_AUTHENTICATION ||
@@ -236,6 +261,9 @@ static int fsr_process_failure(struct ccsds_sdls_ctx *ctx, int error,
     if (!monitored) {
         return error;
     }
+    ccsds_sdls_event_record(
+        ctx, CCSDS_SDLS_EVENT_TAG_UNAUTHENTICATED_FRAME,
+        event_code == 0 ? frame_event_code(error) : event_code, spi, arsn);
     ctx->fsr.alarm = true;
     ctx->fsr.last_spi = spi;
     ctx->fsr.bad_sequence |= error == CCSDS_SDLS_ERR_REPLAY;
@@ -428,9 +456,15 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     __ASSERT(protected_data != NULL, "SDLS protected input is NULL");
     __ASSERT(out != NULL, "SDLS clear output is NULL");
     ASSERT_AUTH_CONTRACT(auth);
+    ctx->authenticated_rx_spi = 0u;
+    ctx->authenticated_rx_arsn = 0u;
     ctx->authenticated_rx_valid = false;
+    ctx->authenticated_rx_dispatching = false;
 
     if (protected_len < CCSDS_SDLS_PROTECTED_OVERHEAD) {
+        ccsds_sdls_event_record(ctx,
+                                CCSDS_SDLS_EVENT_TAG_UNAUTHENTICATED_FRAME,
+                                CCSDS_SDLS_EVENT_FORMAT, 0u, 0u);
         return CCSDS_SDLS_ERR_FORMAT;
     }
     data_len = protected_len - CCSDS_SDLS_PROTECTED_OVERHEAD;
@@ -445,16 +479,21 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     ret = ccsds_sdls_security_header_decode(
         protected_data, CCSDS_SDLS_SECURITY_HEADER_LEN, &header);
     if (ret != 0) {
+        ccsds_sdls_event_record(ctx,
+                                CCSDS_SDLS_EVENT_TAG_UNAUTHENTICATED_FRAME,
+                                CCSDS_SDLS_EVENT_FORMAT, 0u, 0u);
         return ret;
     }
     if (header.spi > CONFIG_CCSDS_SDLS_MAX_SA ||
         !ctx->sas[header.spi - 1u].configured) {
-        return fsr_process_failure(ctx, CCSDS_SDLS_ERR_UNKNOWN_SA, header.spi);
+        return fsr_process_failure(ctx, CCSDS_SDLS_ERR_UNKNOWN_SA, header.spi,
+                                   ccsds_sdls_iv_arsn(header.iv), 0);
     }
     index = (int)header.spi - 1;
     ret = operational_key(ctx, index, expected_role, false, &key);
     if (ret != 0) {
-        return fsr_process_failure(ctx, ret, header.spi);
+        return fsr_process_failure(ctx, ret, header.spi,
+                                   ccsds_sdls_iv_arsn(header.iv), 0);
     }
     sa = &ctx->sas[index];
     gcm = ctx->sa_modes[index] == CCSDS_SDLS_MODE_GCM;
@@ -462,11 +501,13 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     arsn = ccsds_sdls_iv_arsn(header.iv);
     if (sa->rx_arsn_initialized) {
         if (arsn <= sa->rx_arsn) {
-            return fsr_process_failure(ctx, CCSDS_SDLS_ERR_REPLAY, header.spi);
+            return fsr_process_failure(ctx, CCSDS_SDLS_ERR_REPLAY, header.spi,
+                                       arsn, CCSDS_SDLS_EVENT_STALE_ARSN);
         }
         advance = arsn - sa->rx_arsn;
         if (advance > sa->rx_window) {
-            return fsr_process_failure(ctx, CCSDS_SDLS_ERR_REPLAY, header.spi);
+            return fsr_process_failure(ctx, CCSDS_SDLS_ERR_REPLAY, header.spi,
+                                       arsn, CCSDS_SDLS_EVENT_ARSN_GAP);
         }
     }
 
@@ -485,7 +526,7 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
         memset(workspace.data, 0, workspace_len);
         return status == PSA_ERROR_INVALID_SIGNATURE
                    ? fsr_process_failure(ctx, CCSDS_SDLS_ERR_AUTHENTICATION,
-                                         header.spi)
+                                         header.spi, arsn, 0)
                    : CCSDS_SDLS_ERR_PSA;
     }
     if (plaintext_len != (gcm ? data_len : 0u)) {
@@ -497,6 +538,7 @@ int ccsds_sdls_process_security(struct ccsds_sdls_ctx *ctx,
     sa->rx_arsn = arsn;
     sa->rx_arsn_initialized = true;
     ctx->authenticated_rx_spi = header.spi;
+    ctx->authenticated_rx_arsn = arsn;
     ctx->authenticated_rx_valid = true;
     fsr_process_success(ctx, header.spi, arsn);
     memset(workspace.data, 0, workspace_len);

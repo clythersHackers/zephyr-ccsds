@@ -51,9 +51,17 @@ static bool procedure_supported(uint8_t type, uint8_t service_group,
         return known && (type == CCSDS_SDLS_EP_COMMAND ||
                          (type == CCSDS_SDLS_EP_REPLY && reply));
     }
-    return service_group == CCSDS_SDLS_EP_SECURITY_MONITORING &&
-           procedure == CCSDS_SDLS_EP_ALARM_FLAG_RESET &&
-           type == CCSDS_SDLS_EP_COMMAND;
+    if (service_group == CCSDS_SDLS_EP_SECURITY_MONITORING) {
+        bool known = (procedure >= CCSDS_SDLS_EP_PING &&
+                      procedure <= CCSDS_SDLS_EP_SELF_TEST) ||
+                     procedure == CCSDS_SDLS_EP_ALARM_FLAG_RESET;
+
+        return known &&
+               (type == CCSDS_SDLS_EP_COMMAND ||
+                (type == CCSDS_SDLS_EP_REPLY &&
+                 procedure != CCSDS_SDLS_EP_ALARM_FLAG_RESET));
+    }
+    return false;
 }
 
 static void encode_header(uint8_t type, uint8_t service_group,
@@ -106,7 +114,7 @@ int ccsds_sdls_ep_pdu_decode(const uint8_t *encoded, size_t encoded_len,
         encoded_len != pdu_size(data_len)) {
         return CCSDS_SDLS_ERR_FORMAT;
     }
-    if (encoded_len > CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX &&
+    if (encoded_len > CCSDS_SDLS_EP_REPLY_PDU_MAX &&
         encoded_len > CCSDS_SDLS_EP_OTAR_PDU_MAX) {
         return CCSDS_SDLS_ERR_CAPACITY;
     }
@@ -674,6 +682,145 @@ void ccsds_sdls_ep_alarm_flag_reset_encode(uint8_t *out, size_t out_capacity)
              "SDLS EP Alarm Flag Reset output is too small");
     encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_SECURITY_MONITORING,
                   CCSDS_SDLS_EP_ALARM_FLAG_RESET, 0u, out);
+}
+
+void ccsds_sdls_ep_monitoring_command_encode(
+    enum ccsds_sdls_ep_monitoring_procedure procedure, uint8_t *out,
+    size_t out_capacity)
+{
+    __ASSERT(procedure >= CCSDS_SDLS_EP_PING &&
+                 procedure <= CCSDS_SDLS_EP_SELF_TEST,
+             "invalid SDLS EP monitoring command");
+    __ASSERT(out != NULL, "SDLS EP monitoring output is NULL");
+    __ASSERT(out_capacity >= CCSDS_SDLS_EP_HEADER_LEN,
+             "SDLS EP monitoring output is too small");
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_SECURITY_MONITORING,
+                  procedure, 0u, out);
+}
+
+static int decode_empty_monitoring_command(
+    const uint8_t *encoded, size_t encoded_len,
+    enum ccsds_sdls_ep_monitoring_procedure procedure)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu.type != CCSDS_SDLS_EP_COMMAND ||
+        pdu.service_group != CCSDS_SDLS_EP_SECURITY_MONITORING ||
+        pdu.procedure != procedure) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    return pdu.data_len == 0u ? 0 : CCSDS_SDLS_ERR_FORMAT;
+}
+
+static void encode_log_summary(
+    enum ccsds_sdls_ep_monitoring_procedure procedure, uint16_t retained,
+    uint16_t remaining, uint8_t out[CCSDS_SDLS_EP_HEADER_LEN + 4u])
+{
+    encode_header(CCSDS_SDLS_EP_REPLY, CCSDS_SDLS_EP_SECURITY_MONITORING,
+                  procedure, 4u, out);
+    sys_put_be16(retained, out + CCSDS_SDLS_EP_HEADER_LEN);
+    sys_put_be16(remaining, out + CCSDS_SDLS_EP_HEADER_LEN + 2u);
+}
+
+int ccsds_sdls_ep_log_status_reply_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    enum ccsds_sdls_ep_monitoring_procedure procedure,
+    struct ccsds_sdls_ep_log_status_reply *reply)
+{
+    struct ccsds_sdls_ep_log_status_reply decoded;
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(reply != NULL, "SDLS EP log summary output is NULL");
+    if (procedure != CCSDS_SDLS_EP_LOG_STATUS &&
+        procedure != CCSDS_SDLS_EP_ERASE_LOG) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu.type != CCSDS_SDLS_EP_REPLY ||
+        pdu.service_group != CCSDS_SDLS_EP_SECURITY_MONITORING ||
+        pdu.procedure != procedure) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    if (pdu.data_len != 4u) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    decoded.retained_events = sys_get_be16(pdu.data);
+    decoded.remaining_slots = sys_get_be16(pdu.data + 2u);
+    *reply = decoded;
+    return 0;
+}
+
+int ccsds_sdls_ep_dump_log_reply_encode(const struct ccsds_sdls_ctx *ctx,
+                                        uint8_t *out, size_t out_capacity,
+                                        size_t *out_len)
+{
+    uint8_t snapshot[CCSDS_SDLS_EP_DUMP_LOG_PDU_MAX];
+    size_t data_len;
+    size_t offset = CCSDS_SDLS_EP_HEADER_LEN;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(out != NULL, "SDLS EP Dump Log output is NULL");
+    __ASSERT(out_len != NULL, "SDLS EP Dump Log length is NULL");
+    data_len = (size_t)ctx->event_count * CCSDS_SDLS_EVENT_WIRE_LEN;
+    if (out_capacity < pdu_size(data_len)) {
+        return CCSDS_SDLS_ERR_CAPACITY;
+    }
+    encode_header(CCSDS_SDLS_EP_REPLY, CCSDS_SDLS_EP_SECURITY_MONITORING,
+                  CCSDS_SDLS_EP_DUMP_LOG, data_len, snapshot);
+    for (size_t i = 0u; i < ctx->event_count; i++) {
+        size_t index = (ctx->event_read_index + i) %
+                       CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY;
+        const struct ccsds_sdls_event *event = &ctx->events[index];
+
+        snapshot[offset++] = event->pdu_or_event_tag;
+        sys_put_be16(CCSDS_SDLS_EVENT_VALUE_LEN, snapshot + offset);
+        offset += 2u;
+        snapshot[offset++] = event->event_code;
+        sys_put_be16(event->spi, snapshot + offset);
+        offset += 2u;
+        sys_put_be32(event->arsn, snapshot + offset);
+        offset += 4u;
+    }
+    memcpy(out, snapshot, offset);
+    *out_len = offset;
+    return 0;
+}
+
+int ccsds_sdls_ep_self_test_reply_decode(const uint8_t *encoded,
+                                         size_t encoded_len, uint8_t *result)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    uint8_t decoded;
+    int ret;
+
+    __ASSERT(result != NULL, "SDLS EP Self Test output is NULL");
+    ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu.type != CCSDS_SDLS_EP_REPLY ||
+        pdu.service_group != CCSDS_SDLS_EP_SECURITY_MONITORING ||
+        pdu.procedure != CCSDS_SDLS_EP_SELF_TEST) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    if (pdu.data_len != 1u) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    decoded = pdu.data[0];
+    if (decoded != CCSDS_SDLS_SELF_TEST_OK &&
+        decoded != CCSDS_SDLS_SELF_TEST_NOT_OK) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    *result = decoded;
+    return 0;
 }
 
 static int validate_key(psa_key_id_t key_id, psa_key_usage_t required_usage)
@@ -1396,6 +1543,194 @@ int ccsds_sdls_ep_process_sa_status(struct ccsds_sdls_ctx *ctx,
     return 0;
 }
 
+void ccsds_sdls_set_self_test(struct ccsds_sdls_ctx *ctx,
+                              ccsds_sdls_self_test_cb_t callback,
+                              void *user_data)
+{
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    ctx->self_test = callback;
+    ctx->self_test_user_data = user_data;
+}
+
+void ccsds_sdls_event_record(struct ccsds_sdls_ctx *ctx, uint8_t tag,
+                             enum ccsds_sdls_event_code code, uint16_t spi,
+                             uint32_t arsn)
+{
+    struct ccsds_sdls_event *event;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(code >= CCSDS_SDLS_EVENT_FORMAT &&
+                 code <= CCSDS_SDLS_EVENT_CAPACITY,
+             "invalid SDLS monitoring event code");
+    event = &ctx->events[ctx->event_write_index];
+    *event = (struct ccsds_sdls_event){.pdu_or_event_tag = tag,
+                                      .event_code = (uint8_t)code,
+                                      .spi = spi,
+                                      .arsn = arsn};
+    ctx->event_write_index =
+        (ctx->event_write_index + 1u) % CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY;
+    if (ctx->event_count < CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY) {
+        ctx->event_count++;
+    } else {
+        ctx->event_read_index =
+            (ctx->event_read_index + 1u) %
+            CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY;
+        if (ctx->event_overwrites != UINT8_MAX) {
+            ctx->event_overwrites++;
+        }
+    }
+}
+
+static enum ccsds_sdls_event_code event_code_from_error(int error)
+{
+    switch (error) {
+    case CCSDS_SDLS_ERR_FORMAT:
+        return CCSDS_SDLS_EVENT_FORMAT;
+    case CCSDS_SDLS_ERR_AUTHENTICATION:
+        return CCSDS_SDLS_EVENT_AUTHENTICATION;
+    case CCSDS_SDLS_ERR_REPLAY:
+        return CCSDS_SDLS_EVENT_STALE_ARSN;
+    case CCSDS_SDLS_ERR_UNKNOWN_SA:
+        return CCSDS_SDLS_EVENT_UNKNOWN_SA;
+    case CCSDS_SDLS_ERR_SA_STATE:
+        return CCSDS_SDLS_EVENT_SA_STATE;
+    case CCSDS_SDLS_ERR_KEY:
+        return CCSDS_SDLS_EVENT_KEY_ID;
+    case CCSDS_SDLS_ERR_KEY_STATE:
+        return CCSDS_SDLS_EVENT_KEY_STATE;
+    case CCSDS_SDLS_ERR_PSA:
+        return CCSDS_SDLS_EVENT_PSA;
+    case CCSDS_SDLS_ERR_UNSUPPORTED:
+        return CCSDS_SDLS_EVENT_UNSUPPORTED;
+    case CCSDS_SDLS_ERR_CAPACITY:
+        return CCSDS_SDLS_EVENT_CAPACITY;
+    default:
+        return CCSDS_SDLS_EVENT_FORMAT;
+    }
+}
+
+static enum ccsds_sdls_event_code ep_event_code(
+    const struct ccsds_sdls_ep_pdu *pdu, bool pdu_valid, int error)
+{
+    if (!pdu_valid) {
+        return event_code_from_error(error);
+    }
+    if (pdu->service_group == CCSDS_SDLS_EP_KEY_MANAGEMENT) {
+        if (pdu->procedure == CCSDS_SDLS_EP_OTAR &&
+            error == CCSDS_SDLS_ERR_AUTHENTICATION) {
+            return CCSDS_SDLS_EVENT_OTAR_AUTHENTICATION;
+        }
+        if (pdu->procedure == CCSDS_SDLS_EP_KEY_ACTIVATION ||
+            pdu->procedure == CCSDS_SDLS_EP_KEY_DEACTIVATION) {
+            return CCSDS_SDLS_EVENT_KEY_TRANSITION;
+        }
+    }
+    if (pdu->service_group == CCSDS_SDLS_EP_SA_MANAGEMENT) {
+        return CCSDS_SDLS_EVENT_SA_TRANSITION;
+    }
+    if (pdu->service_group == CCSDS_SDLS_EP_SECURITY_MONITORING &&
+        pdu->procedure == CCSDS_SDLS_EP_SELF_TEST) {
+        return CCSDS_SDLS_EVENT_SELF_TEST;
+    }
+    return event_code_from_error(error);
+}
+
+static int process_monitoring(struct ccsds_sdls_ctx *ctx,
+                              const struct ccsds_sdls_ep_pdu *pdu,
+                              const uint8_t *encoded, size_t encoded_len,
+                              uint8_t *reply, size_t reply_capacity,
+                              size_t *reply_len)
+{
+    uint8_t summary[CCSDS_SDLS_EP_HEADER_LEN + 4u];
+    uint8_t self_test_reply[CCSDS_SDLS_EP_HEADER_LEN + 1u];
+    uint8_t result;
+    int ret;
+
+    if (pdu->type != CCSDS_SDLS_EP_COMMAND) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    ret = decode_empty_monitoring_command(encoded, encoded_len,
+                                          pdu->procedure);
+    if (ret != 0) {
+        return ret;
+    }
+    switch (pdu->procedure) {
+    case CCSDS_SDLS_EP_PING:
+        if (reply_capacity < CCSDS_SDLS_EP_HEADER_LEN) {
+            return CCSDS_SDLS_ERR_CAPACITY;
+        }
+        encode_header(CCSDS_SDLS_EP_REPLY,
+                      CCSDS_SDLS_EP_SECURITY_MONITORING,
+                      CCSDS_SDLS_EP_PING, 0u, self_test_reply);
+        memcpy(reply, self_test_reply, CCSDS_SDLS_EP_HEADER_LEN);
+        *reply_len = CCSDS_SDLS_EP_HEADER_LEN;
+        return 0;
+    case CCSDS_SDLS_EP_LOG_STATUS:
+        if (reply_capacity < sizeof(summary)) {
+            return CCSDS_SDLS_ERR_CAPACITY;
+        }
+        encode_log_summary(CCSDS_SDLS_EP_LOG_STATUS, ctx->event_count,
+                           CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY -
+                               ctx->event_count,
+                           summary);
+        memcpy(reply, summary, sizeof(summary));
+        *reply_len = sizeof(summary);
+        return 0;
+    case CCSDS_SDLS_EP_DUMP_LOG:
+        return ccsds_sdls_ep_dump_log_reply_encode(
+            ctx, reply, reply_capacity, reply_len);
+    case CCSDS_SDLS_EP_ERASE_LOG:
+        if (reply_capacity < sizeof(summary)) {
+            return CCSDS_SDLS_ERR_CAPACITY;
+        }
+        encode_log_summary(CCSDS_SDLS_EP_ERASE_LOG, 0u,
+                           CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY, summary);
+        memset(ctx->events, 0, sizeof(ctx->events));
+        ctx->event_count = 0u;
+        ctx->event_read_index = 0u;
+        ctx->event_write_index = 0u;
+        ctx->event_overwrites = 0u;
+        memcpy(reply, summary, sizeof(summary));
+        *reply_len = sizeof(summary);
+        return 0;
+    case CCSDS_SDLS_EP_SELF_TEST:
+        if (reply_capacity < sizeof(self_test_reply)) {
+            return CCSDS_SDLS_ERR_CAPACITY;
+        }
+        result = CCSDS_SDLS_SELF_TEST_NOT_OK;
+        if (ctx->self_test != NULL) {
+            ret = ctx->self_test(ctx->self_test_user_data, &result);
+            if (ret != 0) {
+                result = CCSDS_SDLS_SELF_TEST_NOT_OK;
+            } else if (result != CCSDS_SDLS_SELF_TEST_OK &&
+                       result != CCSDS_SDLS_SELF_TEST_NOT_OK) {
+                return CCSDS_SDLS_ERR_FORMAT;
+            }
+        }
+        encode_header(CCSDS_SDLS_EP_REPLY,
+                      CCSDS_SDLS_EP_SECURITY_MONITORING,
+                      CCSDS_SDLS_EP_SELF_TEST, 1u, self_test_reply);
+        self_test_reply[CCSDS_SDLS_EP_HEADER_LEN] = result;
+        memcpy(reply, self_test_reply, sizeof(self_test_reply));
+        *reply_len = sizeof(self_test_reply);
+        if (result == CCSDS_SDLS_SELF_TEST_NOT_OK) {
+            ccsds_sdls_event_record(
+                ctx,
+                ctx->authenticated_rx_valid ? encoded[0]
+                                            : CCSDS_SDLS_EVENT_TAG_LOCAL,
+                CCSDS_SDLS_EVENT_SELF_TEST,
+                ctx->authenticated_rx_valid ? ctx->authenticated_rx_spi : 0u,
+                ctx->authenticated_rx_valid ? ctx->authenticated_rx_arsn : 0u);
+        }
+        return 0;
+    case CCSDS_SDLS_EP_ALARM_FLAG_RESET:
+        return ccsds_sdls_ep_process_alarm_flag_reset(ctx, encoded,
+                                                       encoded_len);
+    default:
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+}
+
 int ccsds_sdls_ep_process_alarm_flag_reset(struct ccsds_sdls_ctx *ctx,
                                            const uint8_t *encoded,
                                            size_t encoded_len)
@@ -1431,24 +1766,27 @@ int ccsds_sdls_ep_process_pdu(
 {
     struct ccsds_sdls_ep_pdu pdu;
     size_t committed_reply_len = 0u;
+    uint32_t carrier_arsn;
+    uint16_t carrier_spi;
+    uint8_t event_tag;
+    bool carrier_valid;
+    bool pdu_valid = false;
     int ret;
 
     __ASSERT(ctx != NULL, "SDLS context is NULL");
     __ASSERT(encoded != NULL, "SDLS EP packet payload is NULL");
     __ASSERT(reply_len != NULL, "SDLS EP reply length is NULL");
+    carrier_valid = ctx->authenticated_rx_valid;
+    carrier_spi = carrier_valid ? ctx->authenticated_rx_spi : 0u;
+    carrier_arsn = carrier_valid ? ctx->authenticated_rx_arsn : 0u;
+    event_tag = carrier_valid && encoded_len != 0u
+                    ? encoded[0]
+                    : CCSDS_SDLS_EVENT_TAG_LOCAL;
     ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
     if (ret != 0) {
-        return ret;
+        goto out;
     }
-
-    if (pdu.service_group == CCSDS_SDLS_EP_SA_MANAGEMENT &&
-        pdu.type == CCSDS_SDLS_EP_COMMAND && pdu.data_len >= 2u &&
-        pdu.procedure != CCSDS_SDLS_EP_READ_ARSN &&
-        pdu.procedure != CCSDS_SDLS_EP_SA_STATUS &&
-        ctx->authenticated_rx_valid &&
-        sys_get_be16(pdu.data) == ctx->authenticated_rx_spi) {
-        return CCSDS_SDLS_ERR_SA_STATE;
-    }
+    pdu_valid = true;
 
     if (pdu.service_group == CCSDS_SDLS_EP_KEY_MANAGEMENT) {
         switch (pdu.procedure) {
@@ -1516,16 +1854,30 @@ int ccsds_sdls_ep_process_pdu(
             ret = CCSDS_SDLS_ERR_UNSUPPORTED;
             break;
         }
-    } else if (pdu.service_group == CCSDS_SDLS_EP_SECURITY_MONITORING &&
-               pdu.procedure == CCSDS_SDLS_EP_ALARM_FLAG_RESET) {
-        ret = ccsds_sdls_ep_process_alarm_flag_reset(ctx, encoded, encoded_len);
+    } else if (pdu.service_group == CCSDS_SDLS_EP_SECURITY_MONITORING) {
+        __ASSERT(reply != NULL ||
+                     pdu.procedure == CCSDS_SDLS_EP_ALARM_FLAG_RESET,
+                 "SDLS EP monitoring reply is NULL");
+        ret = process_monitoring(ctx, &pdu, encoded, encoded_len, reply,
+                                 reply_capacity, &committed_reply_len);
     } else {
         ret = CCSDS_SDLS_ERR_UNSUPPORTED;
     }
 
+out:
     if (ret != 0) {
-        return ret;
+        if (!(pdu_valid && ret == CCSDS_SDLS_ERR_CAPACITY)) {
+            ccsds_sdls_event_record(ctx, event_tag,
+                                    ep_event_code(&pdu, pdu_valid, ret),
+                                    carrier_spi, carrier_arsn);
+        }
+    } else {
+        *reply_len = committed_reply_len;
     }
-    *reply_len = committed_reply_len;
-    return 0;
+    if (!ctx->authenticated_rx_dispatching) {
+        ctx->authenticated_rx_spi = 0u;
+        ctx->authenticated_rx_arsn = 0u;
+        ctx->authenticated_rx_valid = false;
+    }
+    return ret;
 }

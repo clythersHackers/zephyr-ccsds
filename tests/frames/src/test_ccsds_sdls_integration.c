@@ -50,10 +50,17 @@ struct packet_capture {
 
 struct ep_service_capture {
     struct ccsds_sdls_ctx *sdls;
-    uint8_t reply[CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX];
+    uint8_t reply[CCSDS_SDLS_EP_REPLY_PDU_MAX];
     size_t reply_len;
     uint8_t calls;
 };
+
+static int integration_self_test(void *user_data, uint8_t *result)
+{
+    ARG_UNUSED(user_data);
+    *result = CCSDS_SDLS_SELF_TEST_OK;
+    return 0;
+}
 
 struct tm_capture {
     uint8_t frame[TEST_TM_CODED_LEN];
@@ -530,6 +537,72 @@ ZTEST(ccsds_sdls_integration, test_ep_is_packet_service_after_frame_security)
     zassert_equal(rx.fsr.last_arsn_lsb, 0u);
 }
 
+ZTEST(ccsds_sdls_integration, test_monitoring_pdus_use_authenticated_packet_route)
+{
+    enum {
+        EP_MAP_ID = 63u,
+        EP_APID = 1u,
+    };
+    struct ccsds_space_packet packet = {
+        .version = 0u,
+        .type = CCSDS_PACKET_TYPE_TC,
+        .secondary_header = false,
+        .apid = EP_APID,
+        .sequence_flags = CCSDS_SEQUENCE_UNSEGMENTED,
+    };
+    struct ccsds_sdls_ctx tx;
+    struct ccsds_sdls_ctx rx;
+    struct ccsds_profile_tc_rx profile;
+    struct ccsds_router router;
+    struct ep_service_capture capture = {.sdls = &rx};
+    uint8_t ep_pdu[CCSDS_SDLS_EP_HEADER_LEN];
+    uint8_t encoded_packet[32];
+    uint8_t clear_data[1u + sizeof(encoded_packet)];
+    uint8_t frame[96];
+    uint8_t cltu[CONFIG_CCSDS_MAX_CLTU_LEN];
+    size_t packet_len;
+    size_t frame_len;
+    size_t cltu_len;
+
+    init_ctx(&tx, good_key, CCSDS_SDLS_SA_EP_REPLY_TX,
+             CCSDS_SDLS_MODE_GMAC, CCSDS_SDLS_SA_OPERATIONAL,
+             CCSDS_SDLS_KEY_ACTIVE, 0u, false);
+    init_ctx(&rx, good_key, CCSDS_SDLS_SA_EP_COMMAND_RX,
+             CCSDS_SDLS_MODE_GMAC, CCSDS_SDLS_SA_OPERATIONAL,
+             CCSDS_SDLS_KEY_ACTIVE, 0u, false);
+    ccsds_sdls_set_self_test(&rx, integration_self_test, NULL);
+    ccsds_sdls_event_record(&rx, 0x31u, CCSDS_SDLS_EVENT_FORMAT, TEST_SPI,
+                            0x01020304u);
+
+    for (uint8_t procedure = CCSDS_SDLS_EP_PING;
+         procedure <= CCSDS_SDLS_EP_SELF_TEST; procedure++) {
+        ccsds_sdls_ep_monitoring_command_encode(
+            (enum ccsds_sdls_ep_monitoring_procedure)procedure, ep_pdu,
+            sizeof(ep_pdu));
+        packet.sequence_count = procedure;
+        packet.payload = ep_pdu;
+        packet.payload_len = sizeof(ep_pdu);
+        zassert_ok(ccsds_space_packet_encode(
+            &packet, encoded_packet, sizeof(encoded_packet), &packet_len));
+        clear_data[0] = 0xc0u | EP_MAP_ID;
+        memcpy(clear_data + 1u, encoded_packet, packet_len);
+        frame_len = build_secured_tc_frame_data(
+            &tx, clear_data, packet_len + 1u, frame, sizeof(frame));
+        cltu_len = encode_cltu(frame, frame_len, cltu, sizeof(cltu));
+
+        ccsds_router_init(&router);
+        ccsds_profile_tc_rx_init(&profile, &router);
+        ccsds_profile_tc_rx_set_sdls(&profile, &rx);
+        zassert_ok(ccsds_profile_tc_set_map_apid_handler(
+            &profile, EP_MAP_ID, EP_APID, process_ep_packet, &capture));
+        zassert_ok(ccsds_profile_tc_cltu_dispatch(&profile, cltu, cltu_len));
+        zassert_equal(capture.calls, procedure);
+        zassert_equal(capture.reply[0], 0x80u | ep_pdu[0]);
+        zassert_false(rx.authenticated_rx_valid);
+    }
+    zassert_equal(rx.event_count, 0u);
+}
+
 ZTEST(ccsds_sdls_integration, test_tc_type_bc_controls_bypass_sdls)
 {
     static const uint8_t unlock[] = {0x00u};
@@ -619,7 +692,7 @@ static int capture_tm(uint8_t vcid, const uint8_t *frame, size_t frame_len,
     return 0;
 }
 
-static int stage5_clcw(uint32_t *clcw, void *user_data)
+static int fixed_clcw_provider(uint32_t *clcw, void *user_data)
 {
     ARG_UNUSED(user_data);
     *clcw = 0x010ffffau;
@@ -750,7 +823,7 @@ ZTEST(ccsds_sdls_integration, test_fsr_and_clcw_alternate_on_completed_frames)
 
     ccsds_tm_frame_init();
     ccsds_tm_frame_set_sdls(&tx, TEST_SPI);
-    ccsds_tm_frame_set_clcw_provider(stage5_clcw, NULL);
+    ccsds_tm_frame_set_clcw_provider(fixed_clcw_provider, NULL);
     zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE, capture_tm,
                                              &capture));
     zassert_ok(ccsds_tm_frame_set_vc_route(7u, CCSDS_TM_ROUTE_ARCHIVE));
@@ -780,7 +853,7 @@ ZTEST(ccsds_sdls_integration, test_failed_tm_security_does_not_advance_ocf)
     ccsds_sdls_fsr_set_enabled(&tx, true);
     ccsds_tm_frame_init();
     ccsds_tm_frame_set_sdls(&tx, TEST_SPI);
-    ccsds_tm_frame_set_clcw_provider(stage5_clcw, NULL);
+    ccsds_tm_frame_set_clcw_provider(fixed_clcw_provider, NULL);
     zassert_ok(ccsds_tm_frame_register_route(CCSDS_TM_ROUTE_ARCHIVE, capture_tm,
                                              &capture));
     zassert_ok(ccsds_tm_frame_set_vc_route(7u, CCSDS_TM_ROUTE_ARCHIVE));

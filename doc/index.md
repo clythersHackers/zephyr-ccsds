@@ -30,6 +30,9 @@ families:
   deterministic IV allocation, bounded receive replay protection, and
   transport-independent AES-256-GCM/GMAC processing through PSA, plus bounded
   Appendix D OTAR, key lifecycle, and key verification Extended Procedures.
+  It also provides selected Monitoring and Control procedures, a bounded
+  cycling failure log, and authenticated carrier provenance for routed EP
+  failures.
 
 This guide describes the implemented subset, not the complete CCSDS standards.
 The standards themselves are not distributed with this module.
@@ -93,6 +96,7 @@ All module Kconfig symbols use the `CONFIG_CCSDS_*` namespace.
 | `CONFIG_CCSDS_SDLS_MAX_KEYS` | 8 | 2–255; SDLS | Opaque PSA key-reference slots embedded in each SDLS context. |
 | `CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` | 4 | 1–254; SDLS | First Key ID assigned to a session-key slot; lower IDs are master-key slots. |
 | `CONFIG_CCSDS_SDLS_ARSN_WINDOW` | 1024 | 1–2147483647; SDLS | Maximum accepted forward gap from the last authenticated receive ARSN. |
+| `CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY` | 8 | 1–255; SDLS | Compact failure records embedded in each context; a full ring overwrites its oldest record. |
 | `CONFIG_CCSDS_SDLS_IV_SEED_HIGH/LOW` | 0 | 32-bit hex halves; SDLS | Fixed high and low halves of the deterministic IV seed. |
 
 With RS enabled, the TM transfer-frame body is
@@ -120,8 +124,9 @@ Important static or embedded costs include:
   one receiver slot, filename arrays, checksum state, and missing ranges;
 - each CFDP Space Packet adapter: a primary-header-plus-maximum-PDU packet
   buffer.
-- each default SDLS context: 144 bytes for four SA/receive-counter states,
-  eight opaque PSA key/transmit-counter records, and compact profile arrays.
+- each default SDLS context: 272 bytes for four SA/receive-counter states,
+  eight opaque PSA key/transmit-counter records, compact profile arrays, and
+  the eight-record Stage 6 monitoring ring and callback/provenance metadata.
   Operational key bytes and caller-owned crypto workspaces are not stored in
   the context.
 
@@ -235,6 +240,16 @@ TM frames carry CLCW and FSR OCF values in a completion-driven 1:1 sequence,
 starting with CLCW. See
 [the Stage 5 profile](SDLS_STAGE5_SA_MANAGEMENT_FSR.md) for the exact wire
 forms, lifecycle, transaction, monitoring, and alternation rules.
+
+The Stage 6 monitoring profile adds Ping, Log Status, Dump Log, Erase Log, and
+Self Test while retaining the separate Alarm Flag Reset procedure. Its default
+eight-record ring continuously overwrites the oldest failure, dumps retained
+events oldest-to-newest, and never records successful traffic. Routed EP
+failures carry the authenticated frame SPI/ARSN as temporary provenance only;
+frame-security failures use a distinct unauthenticated tag. Self Test requires
+an optional caller callback and reports not-OK when none is registered. See
+[the Stage 6 profile](SDLS_STAGE6_MONITORING_CONTROL.md) for exact command and
+reply forms, event-code mapping, erase behavior, bounds, and data exclusions.
 
 For UDP, allocate one `struct ccsds_udp` per endpoint and provide local/peer
 IPv4 addresses, ports, maximum unit length, receive callback, thread priority,

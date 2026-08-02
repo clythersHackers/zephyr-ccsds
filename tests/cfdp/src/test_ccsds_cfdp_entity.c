@@ -2199,7 +2199,7 @@ ZTEST(ccsds_cfdp_entity, test_poll_releases_recovery_after_retry_limit)
     zassert_equal(store.discard_count, 1u);
 }
 
-ZTEST(ccsds_cfdp_entity, test_stage24_class1_success_emits_complete_once)
+ZTEST(ccsds_cfdp_entity, test_class1_success_emits_complete_once)
 {
     ccsds_cfdp_entity_t entity;
     struct send_capture send_capture;
@@ -2243,7 +2243,7 @@ ZTEST(ccsds_cfdp_entity, test_stage24_class1_success_emits_complete_once)
 }
 
 ZTEST(ccsds_cfdp_entity,
-      test_stage24_acknowledged_success_emits_complete_after_finished_ack)
+      test_acknowledged_success_emits_complete_after_finished_ack)
 {
     ccsds_cfdp_entity_t entity;
     struct send_capture send_capture;
@@ -2292,7 +2292,7 @@ ZTEST(ccsds_cfdp_entity,
 }
 
 ZTEST(ccsds_cfdp_entity,
-      test_stage24_unsupported_active_pdu_emits_failed_once_and_releases)
+      test_unsupported_active_pdu_emits_failed_once_and_releases)
 {
     ccsds_cfdp_entity_t entity;
     struct send_capture send_capture;
@@ -2329,7 +2329,7 @@ ZTEST(ccsds_cfdp_entity,
 }
 
 ZTEST(ccsds_cfdp_entity,
-      test_stage24_malformed_active_pdu_emits_failed_once_and_releases)
+      test_malformed_active_pdu_emits_failed_once_and_releases)
 {
     ccsds_cfdp_entity_t entity;
     struct send_capture send_capture;
@@ -2365,7 +2365,7 @@ ZTEST(ccsds_cfdp_entity,
 }
 
 ZTEST(ccsds_cfdp_entity,
-      test_stage24_checksum_failure_emits_failed_once_and_releases)
+      test_checksum_failure_emits_failed_once_and_releases)
 {
     ccsds_cfdp_entity_t entity;
     struct send_capture send_capture;
@@ -2406,7 +2406,7 @@ ZTEST(ccsds_cfdp_entity,
 }
 
 ZTEST(ccsds_cfdp_entity,
-      test_stage24_retry_limit_emits_failed_once_and_releases)
+      test_retry_limit_emits_failed_once_and_releases)
 {
     ccsds_cfdp_entity_t entity;
     struct send_capture send_capture;

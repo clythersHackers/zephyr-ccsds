@@ -264,6 +264,7 @@ ZTEST(sdls_wire, test_gmac_round_trip_and_tamper)
     zassert_false(rx.fsr.bad_mac);
     zassert_false(rx.fsr.bad_sa);
     zassert_equal(rx.fsr.last_spi, TEST_SPI);
+    zassert_equal(rx.event_count, 0u);
     zassert_equal(rx.fsr.last_arsn_lsb, 0u);
 
     init_ctx(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, CCSDS_SDLS_MODE_GMAC,
@@ -278,6 +279,13 @@ ZTEST(sdls_wire, test_gmac_round_trip_and_tamper)
     zassert_false(rx.fsr.bad_sequence);
     zassert_false(rx.fsr.bad_sa);
     zassert_equal(rx.fsr.last_spi, TEST_SPI);
+    zassert_equal(rx.event_count, 1u);
+    zassert_equal(rx.events[0].pdu_or_event_tag,
+                  CCSDS_SDLS_EVENT_TAG_UNAUTHENTICATED_FRAME);
+    zassert_equal(rx.events[0].event_code,
+                  CCSDS_SDLS_EVENT_AUTHENTICATION);
+    zassert_equal(rx.events[0].spi, TEST_SPI);
+    zassert_equal(rx.events[0].arsn, 0u);
 }
 
 ZTEST(sdls_wire, test_monotonic_replay_window_allows_only_forward_gaps)
@@ -310,6 +318,7 @@ ZTEST(sdls_wire, test_monotonic_replay_window_allows_only_forward_gaps)
     zassert_equal(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, no_header,
                           frames[2], sizeof(frames[2]), &output),
                   CCSDS_SDLS_ERR_REPLAY);
+    zassert_equal(rx.events[0].event_code, CCSDS_SDLS_EVENT_STALE_ARSN);
     zassert_true(rx.fsr.alarm);
     zassert_true(rx.fsr.bad_sequence);
     zassert_equal(rx.fsr.last_spi, TEST_SPI);
@@ -324,6 +333,7 @@ ZTEST(sdls_wire, test_monotonic_replay_window_allows_only_forward_gaps)
     zassert_equal(process(&rx, CCSDS_SDLS_SA_OPERATIONAL_TC_RX, no_header,
                           frames[4], sizeof(frames[4]), &output),
                   CCSDS_SDLS_ERR_REPLAY);
+    zassert_equal(rx.events[2].event_code, CCSDS_SDLS_EVENT_ARSN_GAP);
     rx.sas[0].rx_window = CONFIG_CCSDS_SDLS_ARSN_WINDOW;
 
     tx.keys[TEST_KEY_ID].tx_arsn =

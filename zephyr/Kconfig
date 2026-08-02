@@ -213,6 +213,14 @@ config CCSDS_SDLS_ARSN_WINDOW
 	  may advance by at most this amount. This permits lost frames without
 	  retaining an out-of-order replay bitmap.
 
+config CCSDS_SDLS_EVENT_LOG_CAPACITY
+	int "SDLS security-event log capacity"
+	default 8
+	range 1 255
+	help
+	  Number of compact security-event records embedded in every SDLS
+	  context. A full log continuously cycles, replacing its oldest record.
+
 config CCSDS_SDLS_IV_SEED_HIGH
 	hex "Upper 32 bits of the fixed SDLS IV seed"
 	default 0x00000000

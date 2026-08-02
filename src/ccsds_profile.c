@@ -556,7 +556,10 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
     if (ret != 0) {
 #ifdef CONFIG_CCSDS_SDLS
         if (profile->sdls != NULL) {
+            profile->sdls->authenticated_rx_spi = 0u;
+            profile->sdls->authenticated_rx_arsn = 0u;
             profile->sdls->authenticated_rx_valid = false;
+            profile->sdls->authenticated_rx_dispatching = false;
         }
 #endif
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_TC_FRAME,
@@ -569,7 +572,10 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
     if (ret != 0) {
 #ifdef CONFIG_CCSDS_SDLS
         if (profile->sdls != NULL) {
+            profile->sdls->authenticated_rx_spi = 0u;
+            profile->sdls->authenticated_rx_arsn = 0u;
             profile->sdls->authenticated_rx_valid = false;
+            profile->sdls->authenticated_rx_dispatching = false;
         }
 #endif
         set_tc_result_error(&result, CCSDS_PROFILE_TC_CLTU_STAGE_PACKET, ret);
@@ -577,11 +583,19 @@ int ccsds_profile_tc_cltu_dispatch(struct ccsds_profile_tc_rx *profile,
         return ret;
     }
 
+#ifdef CONFIG_CCSDS_SDLS
+    if (profile->sdls != NULL) {
+        profile->sdls->authenticated_rx_dispatching = true;
+    }
+#endif
     ret = ccsds_tc_segment_walk_parts(&segment, dispatch_tc_segment_part,
                                       &dispatch);
 #ifdef CONFIG_CCSDS_SDLS
     if (profile->sdls != NULL) {
+        profile->sdls->authenticated_rx_spi = 0u;
+        profile->sdls->authenticated_rx_arsn = 0u;
         profile->sdls->authenticated_rx_valid = false;
+        profile->sdls->authenticated_rx_dispatching = false;
     }
 #endif
     if (ret != 0) {

@@ -403,11 +403,11 @@ with the existing TM generator. Support reporting at least:
 - last SPI; and
 - low bits of the last received sequence value.
 
-Support Alarm Flag Reset. Defer the security event log, log dump/erase,
-self-test procedure, and other monitoring commands unless needed by the
-selected conformance statement. Existing CLCW reporting must remain available;
-any FSR/CLCW alternation policy belongs in the reusable profile only if it is
-fully deterministic and tested.
+Support Alarm Flag Reset in Stage 5. Implement the remaining selected
+Monitoring and Control procedures as the separate bounded Stage 6 described
+below. Existing CLCW reporting must remain available; any FSR/CLCW alternation
+policy belongs in the reusable profile only if it is fully deterministic and
+tested.
 
 ## Implementation Stages
 
@@ -460,7 +460,106 @@ Completed by the fixed Appendix profile in
 - live rekey of fixed TC receive and TM transmit SAs; and
 - rejection of unsupported Create/Delete SA commands without state mutation.
 
-### Stage 6: Akira Integration
+### Stage 6: EP Monitoring and Control
+
+Completed by the fixed monitoring profile in
+`SDLS_STAGE6_MONITORING_CONTROL.md`.
+
+The selected Security Monitoring and Control service group uses the standard
+procedure identifiers and Appendix reference wire forms:
+
+- Ping (`PID 1`) command/reply;
+- Log Status (`PID 2`) command and four-octet summary reply;
+- Dump Log (`PID 3`) command and bounded event-record reply;
+- Erase Log (`PID 4`) command and summary reply;
+- Self Test (`PID 5`) command and one-octet result reply; and
+- the existing Alarm Flag Reset (`PID 7`).
+
+Ping has an empty command and empty reply and must traverse the same
+authenticated MAP ID/APID packet-service path as every other EP procedure. A
+Ping reply confirms only that the EP recipient processed the request; it must
+not expose implementation, key, SA, or platform details.
+
+Add a caller-owned, compile-time-bounded ring of compact fixed-size security
+event records to the SDLS context. The internal record is eight octets: a
+one-octet event tag, a one-octet profile event/error code, a two-octet SPI, and
+a four-octet ARSN. For a routed EP failure, the event tag identifies the
+specific incoming EP PDU and SPI/ARSN identify its authenticated carrying
+frame. This monitoring provenance is supplied by the packet-service routing
+transaction; it does not become an EP command parameter and must not influence
+the command's authorization or state-transition semantics. For a failure
+before authentication completes, SPI/ARSN may record only the untrusted values
+observed in the received security header and the event code must distinguish
+that case. For local administrative calls with no carrying frame, SPI/ARSN are
+zero. Define an explicit one-octet mapping for the module's wider negative
+error values rather than truncating or casting them. Use ordinary host fields
+internally and explicit octet codecs at the wire boundary, not C bitfield or
+packed-structure layout.
+
+The Dump Log codec translates each compact record to the standard one-octet
+Event Message Tag, two-octet Event Message Length, and Event Message Value
+wire form. Confirm the length unit and exact tag/value encodings against the
+standard and Appendix reference vectors before implementing the codec. The
+Appendix informs this external representation; its larger reference log and
+non-overwrite storage behavior are not requirements on the mission profile.
+
+Use a configurable small capacity, initially eight records. When full, a new
+event overwrites the oldest record so the log retains the most recent security
+history. Reaching capacity must never disable or suspend event recording. Dump
+Log returns a stable snapshot from oldest to newest retained record without
+changing the ring. Log Status reports the number of retained events and
+remaining record slots as two big-endian 16-bit values. Retain a saturating
+overwrite count for local diagnostics, but do not add a nonstandard field to
+the Log Status reply. Configure capacity so the complete worst-case Dump Log
+reply fits the compile-time EP reply bound, enforced by a build assertion.
+Erase Log validates the complete command before atomically wiping all records
+and resetting the ring indices and overwrite count; it must not clear FSR
+state, replay state, SA/key state, IV allocation, or OCF phase.
+
+Record at least authentication failure, replay/window failure, unknown or
+unusable SPI/SA, invalid key identifier/state, failed key transition, and OTAR
+master-key authentication failure. Event values must be fixed, bounded, and
+must never contain key material, plaintext OTAR data, authentication tags, or
+other secrets. Do not record routine successful frame authentication, packet
+delivery, EP command processing, or reply generation: the ring is a recent
+failure history, not an activity trace. Log mutation is the explicit monitoring
+exception to the normal rule that a rejected security or EP operation leaves
+protocol state unchanged.
+
+Self Test uses a caller-provided bounded callback and returns its standardized
+one-octet result. The reusable module must not claim a passing diagnostic when
+no callback is configured. Stage 7 supplies any board-specific diagnostic;
+the Stage 6 module tests use a deterministic test callback.
+
+All new PDU codecs must retain the existing bit-length, octet-alignment,
+truncation, trailing-data, unknown-tag, and caller-output atomicity rules. The
+fixed event log is volatile reusable-module state; persistence and recovery
+policy remain consumer responsibilities.
+
+Stage 6 verification must cover:
+
+- exact command/reply vectors for PIDs 1 through 5 and existing PID 7;
+- malformed, non-octet-aligned, truncated, oversized, and trailing data;
+- empty, partially full, and full Log Status and Dump Log replies;
+- deterministic ring wrap, oldest-record overwrite, dump ordering, saturating
+  overwrite accounting, and absence of out-of-bounds writes;
+- event creation from ProcessSecurity and EP failure paths;
+- routed EP failures recording the incoming PDU tag and carrying-frame
+  SPI/ARSN without using that provenance as EP command input;
+- repeated successful protected traffic and EP commands leaving the log
+  unchanged;
+- atomic erase and zeroization without unrelated state mutation;
+- Self Test success, failure, and missing-callback behavior;
+- proof that no reply or event exposes secret material; and
+- end-to-end Ping and log commands through the configured MAP ID/APID packet
+  service.
+
+Key Destruction and Key Inventory remain outside this stage pending an
+explicit mission key-retention and disclosure policy. Create SA and Delete SA
+remain unsupported by the fixed-SA profile. User-defined procedures remain
+unsupported.
+
+### Stage 7: Akira Integration
 
 In the consuming application:
 
@@ -468,7 +567,8 @@ In the consuming application:
 - configure the fixed four-SA/eight-key mission profile;
 - enforce fresh session-key OTAR after reset before protected transmission;
 - connect TC receive and TM transmit services;
-- add narrowly scoped diagnostics without revealing secrets; and
+- register the optional Self Test diagnostic callback and provide narrowly
+  scoped diagnostics without revealing secrets; and
 - verify with `./build.sh -b akiraconsole --ccsds`.
 
 Keep this integration and its west manifest update in the Akira repository,
@@ -494,6 +594,8 @@ Module verification must cover:
 - plaintext staging-buffer zeroization;
 - reset and fresh-key recovery behavior;
 - FSR flag and last-value behavior;
+- Ping, Log Status, Dump Log, Erase Log, and Self Test wire/error behavior;
+- bounded event-log insertion, full-capacity, dump, erase, and zeroization;
 - unchanged non-SDLS TC/TM tests; and
 - full-link transfer with SDLS enabled once the inverse TC/TM harness exists.
 
@@ -523,6 +625,11 @@ they land.
   reset model.
 - PSA key material is not retained in SA metadata or emitted through logs and
   diagnostics.
+- Selected Monitoring and Control PIDs 1 through 5 and 7 have bounded,
+  deterministic command/reply behavior.
+- A full event log overwrites only its oldest retained record, preserves
+  deterministic oldest-to-newest dump order, and cannot exceed any configured
+  PDU, workspace, or context bound.
 - The configured four-SA/eight-key profile has a documented static RAM and
   persistent-storage cost.
 - Existing non-SDLS behavior and tests remain compatible.
