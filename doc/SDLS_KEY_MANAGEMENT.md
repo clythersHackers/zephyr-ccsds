@@ -1,19 +1,20 @@
-# SDLS Stage 4 Key Management Profile
+# SDLS Key Management Profile
 
 ## Scope and conformance basis
 
 This module implements the CCSDS 355.1-B-1 Key Management subset comprising
-OTAR, Key Activation, Key Deactivation, and Key Verification command/reply.
+OTAR, Key Activation, Key Deactivation, Key Verification command/reply, and
+Key Inventory command/reply.
 The common PDU header follows 5.3 and the procedure identifiers follow table
 5-1. Field sizes and algorithms follow the baseline implementation in annex D.
-Key Destruction, Key Inventory, every SA Management procedure, monitoring and
-control, and user-defined procedures are unsupported.
+Key Destruction and user-defined procedures are unsupported. SA Management and
+Monitoring and Control are documented separately.
 
 The three-octet PDU header is an 8-bit tag followed by a big-endian 16-bit
 length. The length is the number of **bits** in the data field, must be a
 multiple of eight, and must exactly account for the received PDU. The profile
-accepts only CCSDS Key Management tags 0x01 through 0x04 for commands and 0x84
-for the Key Verification reply. It rejects user-defined tags, other service
+accepts CCSDS Key Management command tags `0x01` through `0x04` and `0x07`,
+and reply tags `0x84` and `0x87`. It rejects user-defined tags, other service
 groups, nesting, unknown or unsupported procedures, inconsistent lengths,
 truncation, capacity overflow, and trailing octets.
 
@@ -33,6 +34,8 @@ The selected encodings are:
 | Key Deactivation Command | `0x03` | 16-bit Key ID |
 | Key Verification Command | `0x04` | 16-bit Key ID and 128-bit challenge |
 | Key Verification Reply | `0x84` | 16-bit Key ID, 96-bit IV, 128-bit encrypted challenge, and 128-bit tag |
+| Key Inventory Command | `0x07` | 16-bit first Key ID and 16-bit last Key ID |
+| Key Inventory Reply | `0x87` | 16-bit count, then ordered 16-bit Key ID and 8-bit state pairs |
 
 An OTAR data field contains a 16-bit master Key ID, 96-bit IV, one or more
 34-octet encrypted key blocks, and a 16-octet tag. AES-256-GCM provides
@@ -46,6 +49,13 @@ octets for OTAR, 19 octets for Activation/Deactivation, 147 octets for a
 Verification command, 371 octets for its reply, and 136 octets for plaintext
 OTAR staging. The public macros derive these values from the configured fixed
 key capacity and compile-time assertions keep bit lengths representable.
+
+Key Inventory uses the mission-managed 16-bit Key ID width already selected
+for the other key procedures and a one-octet Key State field. State values are
+`0` Pre-Active, `1` Active, and `2` Deactivated. The command range is inclusive.
+The recipient scans it in ascending Key ID order and returns only keys present
+in the trusted table. An undefined slot is therefore omitted and reduces the
+16-bit returned count; no implementation-specific PSA identifier is returned.
 
 Annex D's verification interoperability profile reserves Key IDs 0 through
 127 from session-key use. The existing compact Akira profile instead retains
@@ -77,8 +87,9 @@ Successful keys enter Pre-Activation with transmit ARSN zero. Plaintext key
 blocks, decoded OTAR staging, temporary PSA identifiers, and the full supplied
 workspace are explicitly wiped on every return path. The module never logs
 key material, OTAR IVs, tags, challenges, ciphertext, or decrypted content.
-The default PSA lifetime is volatile, so Stage 4 adds no persistent key-storage
-consumption. Provisioning and persistence policy remain application-owned.
+The default PSA lifetime is volatile, so key management adds no persistent
+key-storage consumption. Provisioning and persistence policy remain
+application-owned.
 
 ## Lifecycle and verification
 
@@ -105,6 +116,23 @@ session slot. It remains unusable until OTAR fills the slot and Activation
 makes the key Active. This supports rollover without SA creation, deletion, or
 Rekey and without rebooting.
 
+## Inventory authorization and transaction behavior
+
+Key Inventory accepts one non-reversed inclusive range wholly inside the
+configured direct-index key table. The command has exactly four data octets;
+truncation, trailing data, incorrect bit length, the wrong direction, and an
+out-of-range endpoint are rejected. The maximum returned pair count is
+`CONFIG_CCSDS_SDLS_MAX_KEYS`, and all buffers are fixed at build time.
+
+Inventory processing is permitted only for a PDU delivered by an authenticated
+protected receive path. It validates every present opaque PSA key and its
+lifecycle state before publishing any reply. The complete reply is built in
+temporary bounded storage and copied to caller output only after all validation
+and capacity checks succeed; the caller-visible length changes only on success.
+Inventory never changes keys, SAs, replay/freshness state, or cryptographic
+counters, and never exports key bytes, PSA identifiers, PSA metadata, OTAR
+data, verification material, tags, or cryptographic workspace.
+
 ## Deliberate restrictions
 
 - Key slots are direct-indexed. OTAR replacement is limited to undefined,
@@ -112,8 +140,8 @@ Rekey and without rebooting.
   from replacement.
 - Algorithms, key size, IV size, tag size, challenge size, and integer widths
   are fixed to annex D; there is no algorithm identifier or negotiation.
-- Key Destruction and Key Inventory are not implemented.
+- Key Destruction is not implemented.
 - No SA Extended Procedure, including Create, Delete, Start, Stop, Rekey, or
-  Expire, is implemented in Stage 4.
+  Expire, is documented with SA management.
 - There is no persistent key recovery, transport, shell, provisioning policy,
   or claim of general CCSDS 355.1 conformance.

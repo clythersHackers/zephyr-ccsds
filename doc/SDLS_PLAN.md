@@ -5,8 +5,8 @@
 The module provides bounded TC receive and TM generation paths, the
 transport-independent Stage 2 SDLS wire primitives described in
 `SDLS_STAGE2_WIRE.md`, and the configured Stage 3 TC/TM integration described
-in `SDLS_STAGE3_INTEGRATION.md`. The bounded Stage 4 Extended Procedure key
-management subset is described in `SDLS_STAGE4_KEY_MANAGEMENT.md`. The fixed-SA
+in `SDLS_STAGE3_INTEGRATION.md`. The bounded Extended Procedure key-management
+subset is described in `SDLS_KEY_MANAGEMENT.md`. The fixed-SA
 management and Frame Security Report subset is described in
 `SDLS_STAGE5_SA_MANAGEMENT_FSR.md`.
 
@@ -361,8 +361,7 @@ Implement:
 - Key Activation;
 - Key Deactivation;
 - Key Verification command/reply; and
-- a bounded Key Inventory query/reply if required by the selected conformance
-  statement.
+- bounded Key Inventory command/reply.
 
 OTAR supports at most the number of free fixed key slots, never the much
 larger maximum illustrated by the standard's baseline profile. The complete
@@ -442,7 +441,7 @@ Completed by the fixed integration profile in `SDLS_STAGE3_INTEGRATION.md`:
 ### Stage 4: EP Key Management
 
 Completed by the fixed Appendix D profile in
-`SDLS_STAGE4_KEY_MANAGEMENT.md`:
+`SDLS_KEY_MANAGEMENT.md`:
 
 - bounded OTAR, Key Activation, Key Deactivation, and Key Verification codecs;
 - atomic AES-256-GCM OTAR into empty predefined session-key slots;
@@ -554,8 +553,7 @@ Stage 6 verification must cover:
 - end-to-end Ping and log commands through the configured MAP ID/APID packet
   service.
 
-Key Destruction and Key Inventory remain outside this stage pending an
-explicit mission key-retention and disclosure policy. Create SA and Delete SA
+Key Destruction remains outside this stage. Create SA and Delete SA
 remain unsupported by the fixed-SA profile. User-defined procedures remain
 unsupported.
 

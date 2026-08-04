@@ -609,7 +609,6 @@ ZTEST(sdls_ep_inventory, test_fixed_table_inventory_is_authenticated_and_read_on
 {
     psa_key_id_t master0 = import_aes_key(0x10u, 32u, PSA_ALG_GCM);
     psa_key_id_t master1 = import_aes_key(0x20u, 32u, PSA_ALG_GCM);
-    psa_key_id_t session4 = import_aes_key(0x40u, 32u, PSA_ALG_GCM);
     psa_key_id_t session5 = import_aes_key(0x50u, 32u, PSA_ALG_GCM);
     psa_key_id_t session6 = import_aes_key(0x60u, 32u, PSA_ALG_GCM);
     struct ccsds_sdls_ctx ctx;
@@ -621,14 +620,16 @@ ZTEST(sdls_ep_inventory, test_fixed_table_inventory_is_authenticated_and_read_on
     struct ccsds_sdls_key keys_before[CONFIG_CCSDS_SDLS_MAX_KEYS];
     struct ccsds_sdls_sa sas_before[CONFIG_CCSDS_SDLS_MAX_SA];
     uint8_t wire[CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_PDU_LEN];
+    uint8_t otar[CCSDS_SDLS_EP_OTAR_PDU_MAX];
     uint8_t reply[CCSDS_SDLS_EP_KEY_INVENTORY_REPLY_PDU_MAX];
     uint8_t scratch[CCSDS_SDLS_EP_WORKSPACE_MIN];
     struct ccsds_sdls_workspace workspace = {scratch, sizeof(scratch)};
     size_t reply_len = 0x55u;
+    uint16_t destination = 4u;
 
     init_master_ctx(&ctx, master0, master1, false, 0u);
-    ctx.keys[4].psa_key_id = session4;
-    ctx.keys[4].state = CCSDS_SDLS_KEY_PREACTIVE;
+    size_t otar_len = make_otar(master0, 0u, &destination, 1u, 0x40u, otar);
+    zassert_ok(ccsds_sdls_ep_process_otar(&ctx, otar, otar_len, workspace));
     ctx.keys[5].psa_key_id = session5;
     ctx.keys[5].state = CCSDS_SDLS_KEY_ACTIVE;
     ctx.keys[6].psa_key_id = session6;
@@ -674,6 +675,32 @@ ZTEST(sdls_ep_inventory, test_fixed_table_inventory_is_authenticated_and_read_on
     zassert_mem_equal(ctx.keys, keys_before, sizeof(keys_before));
     zassert_mem_equal(ctx.sas, sas_before, sizeof(sas_before));
 
+    struct ccsds_sdls_ep_key_command lifecycle = {
+        .key_ids = {4u},
+        .key_count = 1u,
+    };
+    ccsds_sdls_ep_key_command_encode(CCSDS_SDLS_EP_KEY_ACTIVATION, &lifecycle,
+                                     wire, sizeof(wire));
+    zassert_ok(ccsds_sdls_ep_process_key_activation(
+        &ctx, wire, CCSDS_SDLS_EP_HEADER_LEN + 2u));
+    lifecycle.key_ids[0] = 5u;
+    ccsds_sdls_ep_key_command_encode(CCSDS_SDLS_EP_KEY_DEACTIVATION, &lifecycle,
+                                     wire, sizeof(wire));
+    zassert_ok(
+        ccsds_sdls_ep_process_key_deactivation(
+            &ctx, wire, CCSDS_SDLS_EP_HEADER_LEN + 2u));
+    command.first_key_id = 4u;
+    command.last_key_id = 5u;
+    ccsds_sdls_ep_key_inventory_command_encode(&command, wire, sizeof(wire));
+    ctx.authenticated_rx_valid = true;
+    reply_len = 0u;
+    zassert_ok(ccsds_sdls_ep_process_key_inventory(
+        &ctx, wire, sizeof(wire), reply, sizeof(reply), &reply_len));
+    zassert_ok(ccsds_sdls_ep_key_inventory_reply_decode(reply, reply_len,
+                                                        &decoded));
+    zassert_equal(decoded.entries[0].state, CCSDS_SDLS_KEY_ACTIVE);
+    zassert_equal(decoded.entries[1].state, CCSDS_SDLS_KEY_DEACTIVATED);
+
     destroy_ctx_sessions(&ctx);
     zassert_equal(psa_destroy_key(master0), PSA_SUCCESS);
     zassert_equal(psa_destroy_key(master1), PSA_SUCCESS);
@@ -690,6 +717,9 @@ ZTEST(sdls_ep_inventory, test_single_undefined_and_out_of_range_inventory)
     struct ccsds_sdls_ep_key_inventory_reply decoded;
     uint8_t wire[CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_PDU_LEN];
     uint8_t reply[CCSDS_SDLS_EP_KEY_INVENTORY_REPLY_PDU_MAX];
+    uint8_t reply_in_command_direction[] = {0x87, 0x00, 0x10, 0x00, 0x00};
+    uint8_t scratch[CCSDS_SDLS_EP_WORKSPACE_MIN];
+    struct ccsds_sdls_workspace workspace = {scratch, sizeof(scratch)};
     size_t reply_len = 0u;
 
     init_master_ctx(&ctx, master, PSA_KEY_ID_NULL, false, 0u);
@@ -710,6 +740,15 @@ ZTEST(sdls_ep_inventory, test_single_undefined_and_out_of_range_inventory)
                       &ctx, wire, sizeof(wire), reply, sizeof(reply),
                       &reply_len),
                   CCSDS_SDLS_ERR_KEY);
+    zassert_equal(reply_len, 0x55u);
+
+    ctx.authenticated_rx_valid = true;
+    reply_len = 0x55u;
+    zassert_equal(ccsds_sdls_ep_process_pdu(
+                      &ctx, reply_in_command_direction,
+                      sizeof(reply_in_command_direction), workspace, reply,
+                      sizeof(reply), &reply_len),
+                  CCSDS_SDLS_ERR_UNSUPPORTED);
     zassert_equal(reply_len, 0x55u);
     zassert_equal(psa_destroy_key(master), PSA_SUCCESS);
 }

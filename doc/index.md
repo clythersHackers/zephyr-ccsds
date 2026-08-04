@@ -247,7 +247,7 @@ bytes. Multi-key OTAR and lifecycle commands are atomic, and cryptographic
 workspaces are wiped on every return path. Applications provision initial
 trust keys, authorize and transport EP commands, and own persistent-storage
 policy. See
-[the Stage 4 profile](SDLS_STAGE4_KEY_MANAGEMENT.md) for exact encodings,
+[the key-management profile](SDLS_KEY_MANAGEMENT.md) for exact encodings,
 bounds, lifecycle rules, and deliberate restrictions.
 
 The fixed Stage 5 profile adds bounded management of predefined SAs, 32-bit

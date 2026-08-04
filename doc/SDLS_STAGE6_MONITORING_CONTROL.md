@@ -13,7 +13,7 @@ route:
 - Self Test (PID 5); and
 - Alarm Flag Reset (PID 7).
 
-Key Destruction, Key Inventory, Create SA, Delete SA, persistent logging,
+Key Destruction, Create SA, Delete SA, persistent logging,
 user-defined procedures, and application/board diagnostics are not included.
 
 ## Wire profile
