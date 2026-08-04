@@ -1,4 +1,4 @@
-# SDLS Key Management Profile
+# SDLS key management
 
 ## Scope and conformance basis
 
@@ -141,7 +141,7 @@ data, verification material, tags, or cryptographic workspace.
 - Algorithms, key size, IV size, tag size, challenge size, and integer widths
   are fixed to annex D; there is no algorithm identifier or negotiation.
 - Key Destruction is not implemented.
-- No SA Extended Procedure, including Create, Delete, Start, Stop, Rekey, or
-  Expire, is documented with SA management.
+- Create SA and Delete SA are not implemented. The supported predefined-SA
+  procedures are documented in [SA management](sa-management.md).
 - There is no persistent key recovery, transport, shell, provisioning policy,
   or claim of general CCSDS 355.1 conformance.

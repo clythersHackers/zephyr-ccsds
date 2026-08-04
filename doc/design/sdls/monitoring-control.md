@@ -1,4 +1,4 @@
-# SDLS Stage 6 monitoring and control profile
+# SDLS monitoring and control
 
 ## Scope
 

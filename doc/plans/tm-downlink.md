@@ -1,4 +1,4 @@
-# TM Follow-Up Plan
+# TM downlink follow-up plan
 
 ## Status
 
@@ -21,9 +21,9 @@ items do not belong in the standalone module plan.
 ### Ground-Side Downlink Decode
 
 The inverse TM/CADU path required by full-link CFDP validation is tracked in
-[CFDP_PLAN.md](CFDP_PLAN.md). Initially keep profile-specific parsing in the
-integration harness. Promote reusable decode primitives only with focused
-public-API tests.
+the [CFDP full-link plan](cfdp-full-link-validation.md). Initially keep
+profile-specific parsing in the integration harness. Promote reusable decode
+primitives only with focused public-API tests.
 
 ### Protocol Follow-Ups
 

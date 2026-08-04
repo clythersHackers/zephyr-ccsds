@@ -1,4 +1,4 @@
-# TC Follow-Up Plan
+# TC streaming and follow-up plan
 
 ## Status
 
@@ -44,9 +44,10 @@ Requirements:
 
 ### Ground-Side Uplink Support
 
-The TC/CLTU encoding needed for the full-link CFDP test is tracked in
-[CFDP_PLAN.md](CFDP_PLAN.md). Keep test-only construction helpers out of the
-public API unless they become independently reusable.
+The TC/CLTU encoding needed for the full-link CFDP test is tracked in the
+[CFDP full-link plan](cfdp-full-link-validation.md). Keep test-only
+construction helpers out of the public API unless they become independently
+reusable.
 
 ## Acceptance Criteria
 

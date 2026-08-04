@@ -1,8 +1,11 @@
-# SDLS Stage 1 proof record
+# SDLS verification history
 
-This note records the fixed-state and PSA provider evidence for the Stage 1
-implementation. It is a design/verification record, not a claim that SDLS
-transfer-frame processing is implemented.
+This development record preserves the initial fixed-state and PSA-provider
+evidence. The measurements describe the implementation at the time of that
+proof; later SDLS features increased the context size. Current configuration
+and resource facts are maintained in
+[configuration](../reference/configuration.md) and the functional design
+pages. This is verification history, not current user guidance.
 
 ## Fixed state
 
@@ -69,9 +72,9 @@ present in either linked benchmark. Enabling Zephyr's
 `CONFIG_CRYPTO_ESP32_AES` compiles the ESP32 AES engine driver and
 `aes_hal_*`, but that driver serves Zephyr's Crypto API and supports ECB, CBC,
 and CTR. The Mbed TLS PSA driver wrapper does not register it as a PSA AEAD
-accelerator. Therefore the Stage 1 PSA GCM and GMAC operations are software in
-both benchmark variants; the hardware-enabled variant must not be described
-as accelerated.
+accelerator. Therefore the initial PSA GCM and GMAC proof operations are
+software in both benchmark variants; the hardware-enabled variant must not be
+described as accelerated.
 
 For the resolved hardware-driver-enabled variant:
 
@@ -117,11 +120,12 @@ No serial device was available in the development container during this
 proof, so no performance values are recorded. Flash, monitor, and comparison
 instructions are in `samples/sdls_benchmark/README.md`.
 
-## Stage 1 boundaries
+## Historical proof boundary
 
-This stage does not implement security headers/trailers, frame processing,
-Extended Procedures, OTAR, replay decisions, IV allocation or persistence, or
-runtime algorithm selection. It proves only fixed metadata/state ownership and
-the PSA AES-256-GCM/GMAC primitive boundary. Resolving a PSA-to-Espressif GCM
-accelerator integration remains a provider/integration task; it is not hidden
-behind the reusable SDLS API.
+At the time of this proof, the implementation did not include security
+headers/trailers, frame processing, Extended Procedures, OTAR, replay
+decisions, IV allocation or persistence, or runtime algorithm selection. It
+proves only fixed metadata/state ownership and the PSA AES-256-GCM/GMAC
+primitive boundary. Resolving a PSA-to-Espressif GCM accelerator integration
+remains a provider/integration task; it is not hidden behind the reusable SDLS
+API.

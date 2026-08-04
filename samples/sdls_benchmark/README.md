@@ -1,6 +1,6 @@
 # CCSDS SDLS PSA Benchmark
 
-This application benchmarks the same PSA AES-256-GCM API used by the Stage 1
+This application benchmarks the same PSA AES-256-GCM API used by the SDLS
 proof. It measures authentication-only GMAC construction (zero plaintext and
 18 bytes of AAD) and GCM payloads of 32, 64, 256, and 1024 bytes. Each case
 warms up before timing encryption/tag generation and authenticated decryption.

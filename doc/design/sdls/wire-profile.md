@@ -1,4 +1,4 @@
-# SDLS Stage 2 wire-processing profile
+# SDLS wire profile
 
 This note records the compiled SDLS wire profile and its verification
 boundary. It is a design and conformance note, not a claim of complete CCSDS
@@ -68,7 +68,7 @@ applicable TM or TC header bytes, in wire order, and the corresponding mission
 mask. Structure padding and bytes produced after SDLS processing are not
 accepted implicitly.
 
-The Stage 3 TC/TM integration remains responsible for selecting concrete
+The [TM/TC integration design](index.md) remains responsible for selecting concrete
 almost-complete-frame boundaries and the link-specific default mask required
 by clause 4.2.2.6.2.
 
@@ -125,19 +125,12 @@ out-of-order lower values.
 
 ## Fixed state and storage cost
 
-With four SAs and eight keys, the Stage 2 context occupies:
-
-| Component | Count | Bytes each | Bytes |
-|---|---:|---:|---:|
-| Mutable SA and receive state | 4 | 8 | 32 |
-| Key metadata and transmit counter | 8 | 12 | 96 |
-| SA role and mode arrays | — | — | 8 |
-| Sender IV state | 1 | 8 | 8 |
-| Total caller-owned context | — | — | 144 |
-
-The native and 32-bit target layout are both asserted by the Stage 2 tests.
-PSA provider storage and caller-owned crypto workspaces are outside the
-context cost.
+With the default four SAs, eight keys, and eight monitoring records, the
+current complete caller-owned SDLS context is 272 bytes. That includes later
+key/SA-management, FSR, event-ring, callback, and provenance fields in addition
+to the wire-processing state described here. Compile-time and test assertions
+cover the native and 32-bit target layouts. PSA provider storage and
+caller-owned crypto workspaces are outside the context cost.
 
 ## Verification boundary
 
@@ -147,5 +140,5 @@ exclusion, tampered tags and authenticated fields, strictly increasing replay
 state, permitted gaps, natural counter wrap, direct SA/key mapping,
 fixed-SA/key validation, and programmer-contract buffer assertions.
 
-Stage 2 does not modify TC/TM services, Akira integration, `west.yml`, COP-1,
-routing, device I/O, or Extended Procedures.
+The wire codec does not modify TC/TM services, Akira integration, `west.yml`,
+COP-1, routing, device I/O, or Extended Procedures.

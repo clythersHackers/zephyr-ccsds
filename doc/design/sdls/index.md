@@ -1,8 +1,26 @@
-# SDLS Stage 3 TC/TM integration
+# SDLS design
 
-This design note records the reusable transfer-frame integration completed in
-Stage 3. It uses the fixed Stage 2 wire profile and does not add another
-cryptographic, lookup, nonce, replay, authentication-mask, or endian layer.
+This section is architecture and design documentation for developers modifying
+the reusable SDLS implementation. Module integrators should start with the
+[SDLS user guide](../../user-guide/sdls.md); concise support facts are in the
+[supported-feature reference](../../reference/supported-features.md).
+
+The design is split by function:
+
+- [Wire profile](wire-profile.md): security header/trailer, authenticated
+  regions, IV allocation, replay policy, and fixed state.
+- [Key management](key-management.md): OTAR, lifecycle, verification, and Key
+  Inventory transactions.
+- [SA management](sa-management.md): predefined-SA lifecycle, FSR, and OCF
+  integration.
+- [Monitoring and control](monitoring-control.md): event log and monitoring
+  procedures.
+
+## TM/TC frame integration
+
+The reusable transfer-frame integration uses the fixed wire profile and does
+not add another cryptographic, lookup, nonce, replay, authentication-mask, or
+endian layer.
 
 ## TC receive boundary
 
@@ -74,8 +92,9 @@ When `CONFIG_CCSDS_SDLS` is disabled, the SDLS context fields and configuration
 APIs are absent and the original TC and TM paths compile unchanged. When it is
 enabled, a profile remains clear until its SDLS setter is called.
 
-This stage does not provision keys or SAs. The application initializes the
-caller-owned context with the Stage 2 APIs and opaque PSA key identifiers.
-OTAR, Extended Procedures, FSR generation, SA management, persistence,
-runtime SA creation/deletion, and Akira application provisioning remain
-outside Stage 3.
+The frame integration does not provision keys or define application
+persistence. The application initializes the caller-owned context with opaque
+PSA key identifiers and owns provisioning and recovery policy. Extended
+Procedures and FSR generation are reusable module features documented in the
+functional pages above. Runtime SA creation/deletion and AkiraOS policy are
+outside the module's supported profile.

@@ -35,9 +35,11 @@ included in this repository.
 - CFDP PDU codecs, checksums, filestore/UT callback boundaries, Class 1
   closure, bounded missing-range recovery, Space Packet adaptation, and
   reusable service composition.
+- SDLS fixed-profile AES-256-GCM/GMAC wire processing, predefined-SA and key
+  management, selected Extended Procedures, FSR, and bounded monitoring.
 
 This is an intentionally bounded embedded subset, not an implementation of
-every CCSDS service or option. See the [user guide](doc/index.md) for detailed
+every CCSDS service or option. See the [documentation index](doc/index.md) for detailed
 behavior, configuration, ownership, and limitations.
 
 ## Requirements
@@ -128,9 +130,10 @@ CONFIG_CCSDS_CFDP=y
 CONFIG_CCSDS_FRAME_SUPPORT=n
 ```
 
-All protocol state is statically allocated or caller-owned. Review the memory
-and ownership section of the [user guide](doc/index.md) before selecting buffer
-sizes for a constrained target.
+All protocol state is statically allocated or caller-owned. Review the
+[module user guide](doc/user-guide/index.md) and
+[configuration reference](doc/reference/configuration.md) before selecting
+buffer sizes for a constrained target.
 
 ## Build And Run The Sample
 
@@ -191,15 +194,13 @@ lifecycle belong in the consuming application.
 
 ## Documentation
 
-- [Module user guide](doc/index.md)
+- [Documentation index](doc/index.md)
+- [Module user guide](doc/user-guide/index.md)
+- [Development guide](doc/development/index.md)
+- [Design documentation](doc/design/index.md)
+- [Reference](doc/reference/index.md)
+- [Plans](doc/plans/index.md)
 - [Space Packet sample](samples/space_packet/README.md)
-- [SDLS Stage 1 proof record](doc/SDLS_STAGE1_PROOF.md)
-- [SDLS Stage 2 wire-processing profile](doc/SDLS_STAGE2_WIRE.md)
-- [SDLS key-management profile](doc/SDLS_KEY_MANAGEMENT.md)
-- [SDLS Stage 5 SA-management and FSR profile](doc/SDLS_STAGE5_SA_MANAGEMENT_FSR.md)
-- [SDLS Stage 6 monitoring and control profile](doc/SDLS_STAGE6_MONITORING_CONTROL.md)
-- Follow-up plans: [CFDP](doc/CFDP_PLAN.md), [SDLS](doc/SDLS_PLAN.md),
-  [TC](doc/TC_PLAN.md), and [TM](doc/TM_PLAN.md)
 
 ## License
 

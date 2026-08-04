@@ -1,4 +1,4 @@
-# SDLS Stage 5 SA Management and FSR Profile
+# SDLS SA management and Frame Security Report
 
 ## Scope and conformance basis
 
@@ -7,10 +7,11 @@ Start SA, Stop SA, Rekey SA, Expire SA, Set ARSN, Set ARSN Window, Read ARSN
 command/reply, SA Status command/reply, and Alarm Flag Reset. Procedure tags,
 the four-octet Frame Security Report (FSR), and the initial CLCW-first phase
 follow the CCSDS Appendix reference implementation. Create SA, Delete SA,
-runtime association changes, the security event log, and all other monitoring
-procedures are unsupported.
+runtime association changes are unsupported. The security event log and other
+selected monitoring procedures are separate and documented in
+[monitoring and control](monitoring-control.md).
 
-The common three-octet header retains the Stage 4 rules: the big-endian length
+The common three-octet header follows the key-management rules: the big-endian length
 counts data-field bits, must be octet aligned, and must account for the exact
 PDU with no truncation or trailing data. User procedures, unknown tags,
 nesting, incomplete association fields, unsupported sizes, and values beyond
