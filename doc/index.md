@@ -195,19 +195,19 @@ bytes.
 The configured SPI range is dense and one-based: wire SPI `1..MAX_SA` maps
 directly to SA slot `spi - 1`; reserved SPI zero is never used. Key IDs
 `0..MAX_KEYS-1` map directly to key slots. IDs below
-`CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` are pre-provisioned keys and
+`CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` are OTAR master keys and
 IDs at or above it are session keys. Neither identifier nor key role is stored
 redundantly, and lookup performs no search. Unconfigured slots remain
 distinguishable from configured entries. A predefined SA may initially
-reference a pre-provisioned traffic key other than Key 0, or an empty session
-slot for later OTAR rollover. An empty association remains unusable until that
-slot contains an Active key. Every configured key, including a key previously
-delivered by OTAR, is eligible to authenticate a later OTAR by default; a
-consuming mission profile can narrow that set with
-`ccsds_sdls_set_otar_master_allowed()`. Rekey SA only accepts a session key,
-and OTAR can only populate empty session slots. Duplicate identifiers,
-malformed metadata, and capacity overflow are static configuration errors and
-assert.
+reference a pre-provisioned session key, or an empty session slot for later
+OTAR rollover. An empty association remains unusable until that slot contains
+an Active key. Only an Active configured master key below
+`CONFIG_CCSDS_SDLS_SESSION_KEY_BASE` can protect an OTAR. OTAR installs or
+replaces Pre-Active, Deactivated, or undefined session keys and rejects an
+Active destination. Superseded volatile PSA objects are destroyed; persistent
+objects remain application-owned for reset recovery. Rekey SA also accepts
+session keys only. Duplicate identifiers, malformed metadata, and capacity
+overflow are static configuration errors and assert.
 
 `ccsds_sdls_apply_security()` accepts a compact, optionally bit-masked
 transfer-frame header plus one clear data span. Only the mask prefix through
@@ -240,7 +240,7 @@ SA, so a stopped clear channel cannot authorize itself.
 
 The supported Extended Procedure key-management profile uses the CCSDS
 355.1-B-1 Appendix D field sizes. PDU length fields count data-field bits, not
-octets. OTAR accepts AES-256 session keys only into empty predefined slots,
+octets. OTAR accepts AES-256 session keys into undefined or non-Active slots,
 then leaves them Pre-Activation until an authenticated Activation command.
 Verification returns an AES-GCM encrypted challenge proof without exposing key
 bytes. Multi-key OTAR and lifecycle commands are atomic, and cryptographic

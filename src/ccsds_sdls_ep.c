@@ -31,10 +31,15 @@ static bool procedure_supported(uint8_t type, uint8_t service_group,
                                 uint8_t procedure)
 {
     if (service_group == CCSDS_SDLS_EP_KEY_MANAGEMENT) {
-        return procedure >= CCSDS_SDLS_EP_OTAR &&
-               procedure <= CCSDS_SDLS_EP_KEY_VERIFICATION &&
+        bool known = (procedure >= CCSDS_SDLS_EP_OTAR &&
+                      procedure <= CCSDS_SDLS_EP_KEY_VERIFICATION) ||
+                     procedure == CCSDS_SDLS_EP_KEY_INVENTORY;
+        bool reply = procedure == CCSDS_SDLS_EP_KEY_VERIFICATION ||
+                     procedure == CCSDS_SDLS_EP_KEY_INVENTORY;
+
+        return known &&
                (type == CCSDS_SDLS_EP_COMMAND ||
-                procedure == CCSDS_SDLS_EP_KEY_VERIFICATION);
+                (type == CCSDS_SDLS_EP_REPLY && reply));
     }
     if (service_group == CCSDS_SDLS_EP_SA_MANAGEMENT) {
         bool known = procedure == CCSDS_SDLS_EP_READ_ARSN ||
@@ -258,6 +263,141 @@ int ccsds_sdls_ep_key_command_decode(
         command->key_ids[i] = sys_get_be16(pdu.data + i * 2u);
     }
     command->key_count = key_count;
+    return 0;
+}
+
+void ccsds_sdls_ep_key_inventory_command_encode(
+    const struct ccsds_sdls_ep_key_inventory_command *command, uint8_t *out,
+    size_t out_capacity)
+{
+    __ASSERT(command != NULL, "SDLS EP Key Inventory command is NULL");
+    __ASSERT(out != NULL, "SDLS EP Key Inventory command output is NULL");
+    __ASSERT(command->first_key_id <= command->last_key_id,
+             "invalid SDLS EP Key Inventory range");
+    __ASSERT(out_capacity >= CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_PDU_LEN,
+             "SDLS EP Key Inventory command output is too small");
+
+    encode_header(CCSDS_SDLS_EP_COMMAND, CCSDS_SDLS_EP_KEY_MANAGEMENT,
+                  CCSDS_SDLS_EP_KEY_INVENTORY,
+                  CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_DATA_LEN, out);
+    sys_put_be16(command->first_key_id, out + CCSDS_SDLS_EP_HEADER_LEN);
+    sys_put_be16(command->last_key_id,
+                 out + CCSDS_SDLS_EP_HEADER_LEN + 2u);
+}
+
+int ccsds_sdls_ep_key_inventory_command_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_key_inventory_command *command)
+{
+    struct ccsds_sdls_ep_pdu pdu;
+    int ret;
+
+    __ASSERT(command != NULL, "SDLS EP Key Inventory command output is NULL");
+    ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu.type != CCSDS_SDLS_EP_COMMAND ||
+        pdu.service_group != CCSDS_SDLS_EP_KEY_MANAGEMENT ||
+        pdu.procedure != CCSDS_SDLS_EP_KEY_INVENTORY) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    if (pdu.data_len != CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_DATA_LEN) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+
+    command->first_key_id = sys_get_be16(pdu.data);
+    command->last_key_id = sys_get_be16(pdu.data + 2u);
+    if (command->first_key_id > command->last_key_id) {
+        return CCSDS_SDLS_ERR_KEY;
+    }
+    return 0;
+}
+
+int ccsds_sdls_ep_key_inventory_reply_encode(
+    const struct ccsds_sdls_ep_key_inventory_reply *reply, uint8_t *out,
+    size_t out_capacity, size_t *out_len)
+{
+    size_t data_len;
+    size_t encoded_len;
+
+    __ASSERT(reply != NULL, "SDLS EP Key Inventory reply is NULL");
+    __ASSERT(out != NULL, "SDLS EP Key Inventory reply output is NULL");
+    __ASSERT(out_len != NULL, "SDLS EP Key Inventory reply length is NULL");
+    if (reply->key_count > CCSDS_SDLS_EP_MAX_RECIPIENTS) {
+        return CCSDS_SDLS_ERR_CAPACITY;
+    }
+    data_len = 2u + reply->key_count * CCSDS_SDLS_EP_KEY_INVENTORY_ENTRY_LEN;
+    encoded_len = pdu_size(data_len);
+    if (out_capacity < encoded_len) {
+        return CCSDS_SDLS_ERR_CAPACITY;
+    }
+    for (size_t i = 0u; i < reply->key_count; i++) {
+        if (reply->entries[i].state > CCSDS_SDLS_KEY_DEACTIVATED ||
+            (i != 0u &&
+             reply->entries[i - 1u].key_id >= reply->entries[i].key_id)) {
+            return CCSDS_SDLS_ERR_FORMAT;
+        }
+    }
+
+    encode_header(CCSDS_SDLS_EP_REPLY, CCSDS_SDLS_EP_KEY_MANAGEMENT,
+                  CCSDS_SDLS_EP_KEY_INVENTORY, data_len, out);
+    sys_put_be16((uint16_t)reply->key_count,
+                 out + CCSDS_SDLS_EP_HEADER_LEN);
+    for (size_t i = 0u; i < reply->key_count; i++) {
+        size_t offset = CCSDS_SDLS_EP_HEADER_LEN + 2u +
+                        i * CCSDS_SDLS_EP_KEY_INVENTORY_ENTRY_LEN;
+
+        sys_put_be16(reply->entries[i].key_id, out + offset);
+        out[offset + 2u] = reply->entries[i].state;
+    }
+    *out_len = encoded_len;
+    return 0;
+}
+
+int ccsds_sdls_ep_key_inventory_reply_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_key_inventory_reply *reply)
+{
+    struct ccsds_sdls_ep_key_inventory_reply decoded = {0};
+    struct ccsds_sdls_ep_pdu pdu;
+    size_t expected_len;
+    int ret;
+
+    __ASSERT(reply != NULL, "SDLS EP Key Inventory reply output is NULL");
+    ret = ccsds_sdls_ep_pdu_decode(encoded, encoded_len, &pdu);
+    if (ret != 0) {
+        return ret;
+    }
+    if (pdu.type != CCSDS_SDLS_EP_REPLY ||
+        pdu.service_group != CCSDS_SDLS_EP_KEY_MANAGEMENT ||
+        pdu.procedure != CCSDS_SDLS_EP_KEY_INVENTORY) {
+        return CCSDS_SDLS_ERR_UNSUPPORTED;
+    }
+    if (pdu.data_len < 2u) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    decoded.key_count = sys_get_be16(pdu.data);
+    if (decoded.key_count > CCSDS_SDLS_EP_MAX_RECIPIENTS) {
+        return CCSDS_SDLS_ERR_CAPACITY;
+    }
+    expected_len = 2u +
+                   decoded.key_count * CCSDS_SDLS_EP_KEY_INVENTORY_ENTRY_LEN;
+    if (pdu.data_len != expected_len) {
+        return CCSDS_SDLS_ERR_FORMAT;
+    }
+    for (size_t i = 0u; i < decoded.key_count; i++) {
+        size_t offset = 2u + i * CCSDS_SDLS_EP_KEY_INVENTORY_ENTRY_LEN;
+
+        decoded.entries[i].key_id = sys_get_be16(pdu.data + offset);
+        decoded.entries[i].state = pdu.data[offset + 2u];
+        if (decoded.entries[i].state > CCSDS_SDLS_KEY_DEACTIVATED ||
+            (i != 0u && decoded.entries[i - 1u].key_id >=
+                            decoded.entries[i].key_id)) {
+            return CCSDS_SDLS_ERR_FORMAT;
+        }
+    }
+    *reply = decoded;
     return 0;
 }
 
@@ -855,12 +995,24 @@ __weak psa_status_t ccsds_sdls_ep_psa_destroy_key(psa_key_id_t key_id)
     return psa_destroy_key(key_id);
 }
 
+static void destroy_replaced_volatile_key(psa_key_id_t key_id)
+{
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+
+    if (psa_get_key_attributes(key_id, &attributes) == PSA_SUCCESS &&
+        psa_get_key_lifetime(&attributes) == PSA_KEY_LIFETIME_VOLATILE) {
+        (void)ccsds_sdls_ep_psa_destroy_key(key_id);
+    }
+    psa_reset_key_attributes(&attributes);
+}
+
 int ccsds_sdls_ep_process_otar(struct ccsds_sdls_ctx *ctx,
                                const uint8_t *encoded, size_t encoded_len,
                                struct ccsds_sdls_workspace workspace)
 {
     psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
     psa_key_id_t imported[CCSDS_SDLS_EP_MAX_OTAR_KEYS] = {0};
+    psa_key_id_t replaced[CCSDS_SDLS_EP_MAX_OTAR_KEYS] = {0};
     uint16_t destinations[CCSDS_SDLS_EP_MAX_OTAR_KEYS] = {0};
     struct ccsds_sdls_ep_otar otar;
     struct ccsds_sdls_key *master;
@@ -881,8 +1033,7 @@ int ccsds_sdls_ep_process_otar(struct ccsds_sdls_ctx *ctx,
     if (ret != 0) {
         goto out;
     }
-    if (otar.master_key_id >= CONFIG_CCSDS_SDLS_MAX_KEYS ||
-        !ctx->otar_master_allowed[otar.master_key_id] ||
+    if (otar.master_key_id >= CONFIG_CCSDS_SDLS_SESSION_KEY_BASE ||
         ccsds_sdls_key_lookup(ctx, otar.master_key_id, &master) != 0 ||
         master->state != CCSDS_SDLS_KEY_ACTIVE) {
         ret = CCSDS_SDLS_ERR_KEY;
@@ -925,7 +1076,8 @@ int ccsds_sdls_ep_process_otar(struct ccsds_sdls_ctx *ctx,
             ret = CCSDS_SDLS_ERR_FORMAT;
             goto out;
         }
-        if (ctx->keys[key_id].psa_key_id != PSA_KEY_ID_NULL) {
+        if (ctx->keys[key_id].psa_key_id != PSA_KEY_ID_NULL &&
+            ctx->keys[key_id].state == CCSDS_SDLS_KEY_ACTIVE) {
             ret = CCSDS_SDLS_ERR_KEY_STATE;
             goto out;
         }
@@ -953,11 +1105,17 @@ int ccsds_sdls_ep_process_otar(struct ccsds_sdls_ctx *ctx,
     for (size_t i = 0u; i < otar.key_count; i++) {
         struct ccsds_sdls_key *key = &ctx->keys[destinations[i]];
 
+        replaced[i] = key->psa_key_id;
         key->psa_key_id = imported[i];
         key->state = CCSDS_SDLS_KEY_PREACTIVE;
         key->tx_arsn = 0u;
-        ctx->otar_master_allowed[destinations[i]] = true;
         imported[i] = PSA_KEY_ID_NULL;
+    }
+    for (size_t i = 0u; i < otar.key_count; i++) {
+        if (replaced[i] != PSA_KEY_ID_NULL) {
+            destroy_replaced_volatile_key(replaced[i]);
+            replaced[i] = PSA_KEY_ID_NULL;
+        }
     }
     ret = 0;
 
@@ -970,6 +1128,7 @@ out:
     psa_reset_key_attributes(&attributes);
     wipe(&otar, sizeof(otar));
     wipe(imported, sizeof(imported));
+    wipe(replaced, sizeof(replaced));
     wipe(destinations, sizeof(destinations));
     wipe(seen, sizeof(seen));
     wipe(workspace.data, workspace.capacity);
@@ -1043,6 +1202,69 @@ int ccsds_sdls_ep_process_key_deactivation(struct ccsds_sdls_ctx *ctx,
     __ASSERT(encoded != NULL, "SDLS EP deactivation input is NULL");
     return process_lifecycle(ctx, encoded, encoded_len,
                              CCSDS_SDLS_EP_KEY_DEACTIVATION);
+}
+
+int ccsds_sdls_ep_process_key_inventory(
+    struct ccsds_sdls_ctx *ctx, const uint8_t *encoded, size_t encoded_len,
+    uint8_t *reply, size_t reply_capacity, size_t *reply_len)
+{
+    struct ccsds_sdls_ep_key_inventory_command command;
+    struct ccsds_sdls_ep_key_inventory_reply response = {0};
+    uint8_t encoded_reply[CCSDS_SDLS_EP_KEY_INVENTORY_REPLY_PDU_MAX];
+    size_t encoded_reply_len = 0u;
+    int ret;
+
+    __ASSERT(ctx != NULL, "SDLS context is NULL");
+    __ASSERT(encoded != NULL, "SDLS EP Key Inventory input is NULL");
+    __ASSERT(reply != NULL, "SDLS EP Key Inventory output is NULL");
+    __ASSERT(reply_len != NULL, "SDLS EP Key Inventory output length is NULL");
+
+    if (!ctx->authenticated_rx_valid) {
+        return CCSDS_SDLS_ERR_AUTHENTICATION;
+    }
+    ret = ccsds_sdls_ep_key_inventory_command_decode(encoded, encoded_len,
+                                                      &command);
+    if (ret != 0) {
+        return ret;
+    }
+    if (command.last_key_id >= CONFIG_CCSDS_SDLS_MAX_KEYS) {
+        return CCSDS_SDLS_ERR_KEY;
+    }
+
+    for (uint16_t key_id = command.first_key_id;
+         key_id <= command.last_key_id; key_id++) {
+        const struct ccsds_sdls_key *key = &ctx->keys[key_id];
+
+        if (key->psa_key_id == PSA_KEY_ID_NULL) {
+            continue;
+        }
+        if (key->state > CCSDS_SDLS_KEY_DEACTIVATED) {
+            return CCSDS_SDLS_ERR_KEY_STATE;
+        }
+        ret = validate_key(key->psa_key_id,
+                           PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+        if (ret != 0) {
+            return ret;
+        }
+        if (response.key_count == ARRAY_SIZE(response.entries)) {
+            return CCSDS_SDLS_ERR_CAPACITY;
+        }
+        response.entries[response.key_count].key_id = key_id;
+        response.entries[response.key_count].state = key->state;
+        response.key_count++;
+    }
+
+    ret = ccsds_sdls_ep_key_inventory_reply_encode(
+        &response, encoded_reply, sizeof(encoded_reply), &encoded_reply_len);
+    if (ret != 0) {
+        return ret;
+    }
+    if (reply_capacity < encoded_reply_len) {
+        return CCSDS_SDLS_ERR_CAPACITY;
+    }
+    memcpy(reply, encoded_reply, encoded_reply_len);
+    *reply_len = encoded_reply_len;
+    return 0;
 }
 
 int ccsds_sdls_ep_process_key_verification(
@@ -1827,6 +2049,12 @@ int ccsds_sdls_ep_process_pdu(
                     (pdu.data_len / CCSDS_SDLS_EP_VERIFY_COMMAND_ENTRY_LEN) *
                         CCSDS_SDLS_EP_VERIFY_REPLY_ENTRY_LEN;
             }
+            break;
+        case CCSDS_SDLS_EP_KEY_INVENTORY:
+            __ASSERT(reply != NULL, "SDLS EP Key Inventory reply is NULL");
+            ret = ccsds_sdls_ep_process_key_inventory(
+                ctx, encoded, encoded_len, reply, reply_capacity,
+                &committed_reply_len);
             break;
         default:
             ret = CCSDS_SDLS_ERR_UNSUPPORTED;

@@ -54,7 +54,6 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
 
         ctx->keys[key_id].psa_key_id = keys[i].psa_key_id;
         ctx->keys[key_id].state = (uint8_t)keys[i].state;
-        ctx->otar_master_allowed[key_id] = true;
     }
 
     for (size_t i = 0u; i < sa_count; i++) {
@@ -107,17 +106,6 @@ void ccsds_sdls_init(struct ccsds_sdls_ctx *ctx,
         ctx->sas[sa_slot].rx_arsn_initialized = sas[i].rx_arsn_initialized;
         ctx->sas[sa_slot].configured = true;
     }
-}
-
-void ccsds_sdls_set_otar_master_allowed(struct ccsds_sdls_ctx *ctx,
-                                        uint16_t key_id, bool allowed)
-{
-    __ASSERT(ctx != NULL, "SDLS context is NULL");
-    __ASSERT(key_id < CONFIG_CCSDS_SDLS_MAX_KEYS,
-             "OTAR master key is outside the configured range");
-    __ASSERT(ctx->keys[key_id].psa_key_id != PSA_KEY_ID_NULL,
-             "OTAR master key is not configured");
-    ctx->otar_master_allowed[key_id] = allowed;
 }
 
 int ccsds_sdls_sa_lookup(struct ccsds_sdls_ctx *ctx, uint16_t spi,

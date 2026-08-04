@@ -58,9 +58,9 @@ range.
 
 Only a present, Active master slot below the configured session-key boundary
 may authenticate an OTAR. Its opaque PSA key must be a 256-bit AES key with GCM
-and decrypt usage. Decrypted entries may address only empty direct-index
-session slots. Master destinations, out-of-range IDs, duplicates, occupied or
-deactivated destinations, non-256-bit material, and excess entries are
+and decrypt usage. Decrypted entries may address undefined, Pre-Active, or
+Deactivated direct-index session slots. Master destinations, out-of-range IDs,
+duplicates, Active destinations, non-256-bit material, and excess entries are
 rejected.
 
 Recipient processing authenticates and decrypts the entire key block before
@@ -69,6 +69,9 @@ before the first import. Each successful import uses volatile PSA AES-256-GCM
 attributes and produces only an opaque PSA identifier. Metadata is committed
 only after every import succeeds. If a later import fails, every PSA key
 created earlier in that operation is destroyed and no key-table entry changes.
+After an atomic table replacement, superseded volatile opaque PSA objects are
+destroyed internally. Persistent objects remain application-owned so a
+pre-provisioned recovery key is not erased by an operational rollover.
 
 Successful keys enter Pre-Activation with transmit ARSN zero. Plaintext key
 blocks, decoded OTAR staging, temporary PSA identifiers, and the full supplied
@@ -104,8 +107,9 @@ Rekey and without rebooting.
 
 ## Deliberate restrictions
 
-- Key slots are direct-indexed and only empty session slots accept OTAR;
-  replacing an occupied or Deactivated slot requires application policy.
+- Key slots are direct-indexed. OTAR replacement is limited to undefined,
+  Pre-Active, or Deactivated session slots; Active session slots are protected
+  from replacement.
 - Algorithms, key size, IV size, tag size, challenge size, and integer widths
   are fixed to annex D; there is no algorithm identifier or negotiation.
 - Key Destruction and Key Inventory are not implemented.

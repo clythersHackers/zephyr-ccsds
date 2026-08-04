@@ -165,6 +165,98 @@ ZTEST(sdls_ep_codec, test_exact_key_command_vectors)
     zassert_mem_equal(encoded, deactivation, sizeof(deactivation));
 }
 
+ZTEST(sdls_ep_codec, test_exact_key_inventory_vectors)
+{
+    const struct ccsds_sdls_ep_key_inventory_command command = {
+        .first_key_id = 0x0004u,
+        .last_key_id = 0x000bu,
+    };
+    const struct ccsds_sdls_ep_key_inventory_reply reply = {
+        .entries = {{.key_id = 0x0004u, .state = CCSDS_SDLS_KEY_PREACTIVE},
+                    {.key_id = 0x0007u, .state = CCSDS_SDLS_KEY_ACTIVE},
+                    {.key_id = 0x000bu,
+                     .state = CCSDS_SDLS_KEY_DEACTIVATED}},
+        .key_count = 3u,
+    };
+    static const uint8_t expected_command[] = {
+        0x07, 0x00, 0x20, 0x00, 0x04, 0x00, 0x0b,
+    };
+    static const uint8_t expected_reply[] = {
+        0x87, 0x00, 0x58, 0x00, 0x03, 0x00, 0x04,
+        0x00, 0x00, 0x07, 0x01, 0x00, 0x0b, 0x02,
+    };
+    struct ccsds_sdls_ep_key_inventory_command decoded_command;
+    struct ccsds_sdls_ep_key_inventory_reply decoded_reply;
+    uint8_t encoded_command[sizeof(expected_command)];
+    uint8_t encoded_reply[sizeof(expected_reply)];
+    size_t encoded_reply_len = 0u;
+
+    ccsds_sdls_ep_key_inventory_command_encode(
+        &command, encoded_command, sizeof(encoded_command));
+    zassert_mem_equal(encoded_command, expected_command,
+                      sizeof(expected_command));
+    zassert_ok(ccsds_sdls_ep_key_inventory_command_decode(
+        expected_command, sizeof(expected_command), &decoded_command));
+    zassert_equal(decoded_command.first_key_id, command.first_key_id);
+    zassert_equal(decoded_command.last_key_id, command.last_key_id);
+
+    zassert_ok(ccsds_sdls_ep_key_inventory_reply_encode(
+        &reply, encoded_reply, sizeof(encoded_reply), &encoded_reply_len));
+    zassert_equal(encoded_reply_len, sizeof(expected_reply));
+    zassert_mem_equal(encoded_reply, expected_reply, sizeof(expected_reply));
+    zassert_ok(ccsds_sdls_ep_key_inventory_reply_decode(
+        expected_reply, sizeof(expected_reply), &decoded_reply));
+    zassert_equal(decoded_reply.key_count, reply.key_count);
+    zassert_mem_equal(decoded_reply.entries, reply.entries,
+                      reply.key_count * sizeof(reply.entries[0]));
+}
+
+ZTEST(sdls_ep_codec, test_key_inventory_rejects_malformed_wire)
+{
+    struct ccsds_sdls_ep_key_inventory_command command;
+    struct ccsds_sdls_ep_key_inventory_reply reply;
+    uint8_t reversed[] = {0x07, 0x00, 0x20, 0x00, 0x05, 0x00, 0x04};
+    uint8_t wrong_type[] = {0x87, 0x00, 0x20, 0x00, 0x04, 0x00, 0x05};
+    uint8_t wrong_group[] = {0x17, 0x00, 0x20, 0x00, 0x04, 0x00, 0x05};
+    uint8_t wrong_procedure[] = {0x04, 0x00, 0x20, 0x00, 0x04, 0x00, 0x05};
+    uint8_t wrong_bits[] = {0x07, 0x00, 0x18, 0x00, 0x04, 0x00, 0x05};
+    uint8_t bad_count[] = {0x87, 0x00, 0x10, 0x00, 0x01};
+    uint8_t bad_state[] = {0x87, 0x00, 0x28, 0x00,
+                           0x01, 0x00, 0x04, 0x03};
+    uint8_t duplicate[] = {0x87, 0x00, 0x40, 0x00, 0x02, 0x00,
+                           0x04, 0x00, 0x00, 0x04, 0x01};
+
+    for (size_t len = 0u; len < sizeof(reversed); len++) {
+        zassert_not_equal(ccsds_sdls_ep_key_inventory_command_decode(
+                              reversed, len, &command),
+                          0);
+    }
+    zassert_equal(ccsds_sdls_ep_key_inventory_command_decode(
+                      reversed, sizeof(reversed), &command),
+                  CCSDS_SDLS_ERR_KEY);
+    zassert_equal(ccsds_sdls_ep_key_inventory_command_decode(
+                      wrong_type, sizeof(wrong_type), &command),
+                  CCSDS_SDLS_ERR_UNSUPPORTED);
+    zassert_equal(ccsds_sdls_ep_key_inventory_command_decode(
+                      wrong_group, sizeof(wrong_group), &command),
+                  CCSDS_SDLS_ERR_UNSUPPORTED);
+    zassert_equal(ccsds_sdls_ep_key_inventory_command_decode(
+                      wrong_procedure, sizeof(wrong_procedure), &command),
+                  CCSDS_SDLS_ERR_UNSUPPORTED);
+    zassert_equal(ccsds_sdls_ep_key_inventory_command_decode(
+                      wrong_bits, sizeof(wrong_bits), &command),
+                  CCSDS_SDLS_ERR_FORMAT);
+    zassert_equal(ccsds_sdls_ep_key_inventory_reply_decode(
+                      bad_count, sizeof(bad_count), &reply),
+                  CCSDS_SDLS_ERR_FORMAT);
+    zassert_equal(ccsds_sdls_ep_key_inventory_reply_decode(
+                      bad_state, sizeof(bad_state), &reply),
+                  CCSDS_SDLS_ERR_FORMAT);
+    zassert_equal(ccsds_sdls_ep_key_inventory_reply_decode(
+                      duplicate, sizeof(duplicate), &reply),
+                  CCSDS_SDLS_ERR_FORMAT);
+}
+
 ZTEST(sdls_ep_codec, test_exact_verification_vectors)
 {
     struct ccsds_sdls_ep_verify_command command = {.key_count = 1u};
@@ -292,14 +384,14 @@ ZTEST(sdls_ep_otar, test_single_and_maximum_atomic_otar)
     zassert_not_equal(ctx.keys[4].psa_key_id, PSA_KEY_ID_NULL);
     zassert_equal(ctx.keys[4].state, CCSDS_SDLS_KEY_PREACTIVE);
     zassert_equal(ctx.keys[4].tx_arsn, 0u);
-    zassert_true(ctx.otar_master_allowed[4]);
     assert_zero(scratch, sizeof(scratch));
 
     ctx.keys[4].state = CCSDS_SDLS_KEY_ACTIVE;
     single[0] = 5u;
     len = make_otar(ctx.keys[4].psa_key_id, 4u, single, 1u, 0x41u, pdu);
-    zassert_ok(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace));
-    zassert_not_equal(ctx.keys[5].psa_key_id, PSA_KEY_ID_NULL);
+    zassert_equal(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace),
+                  CCSDS_SDLS_ERR_KEY);
+    zassert_equal(ctx.keys[5].psa_key_id, PSA_KEY_ID_NULL);
     destroy_ctx_sessions(&ctx);
 
     init_master_ctx(&ctx, master, PSA_KEY_ID_NULL, false, 0u);
@@ -313,7 +405,7 @@ ZTEST(sdls_ep_otar, test_single_and_maximum_atomic_otar)
     zassert_equal(psa_destroy_key(master), PSA_SUCCESS);
 }
 
-ZTEST(sdls_ep_otar, test_tamper_wrong_master_duplicate_and_ineligible)
+ZTEST(sdls_ep_otar, test_tamper_wrong_master_duplicate_and_session_master)
 {
     psa_key_id_t master = import_aes_key(0x20u, 32u, PSA_ALG_GCM);
     psa_key_id_t wrong_master = import_aes_key(0x60u, 32u, PSA_ALG_GCM);
@@ -327,13 +419,6 @@ ZTEST(sdls_ep_otar, test_tamper_wrong_master_duplicate_and_ineligible)
     size_t len = make_otar(master, 0u, ids, ARRAY_SIZE(ids), 0x30u, pdu);
 
     init_master_ctx(&ctx, master, wrong_master, false, 0u);
-    len = make_otar(wrong_master, 1u, ids, ARRAY_SIZE(ids), 0x2fu, pdu);
-    ccsds_sdls_set_otar_master_allowed(&ctx, 1u, false);
-    zassert_equal(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace),
-                  CCSDS_SDLS_ERR_KEY);
-    zassert_equal(ctx.keys[4].psa_key_id, PSA_KEY_ID_NULL);
-    ccsds_sdls_set_otar_master_allowed(&ctx, 1u, true);
-
     len = make_otar(master, 0u, ids, ARRAY_SIZE(ids), 0x30u, pdu);
     memcpy(original, pdu, len);
     const size_t tamper_offsets[] = {17u, len - 1u, 5u};
@@ -363,12 +448,73 @@ ZTEST(sdls_ep_otar, test_tamper_wrong_master_duplicate_and_ineligible)
 
     len = make_otar(master, 0u, ids, 1u, 0x30u, pdu);
     zassert_ok(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace));
-    len = make_otar(master, 0u, ids, 1u, 0x31u, pdu);
+    ctx.keys[4].state = CCSDS_SDLS_KEY_ACTIVE;
+    len = make_otar(ctx.keys[4].psa_key_id, 4u, &ids[1], 1u, 0x31u, pdu);
+    zassert_equal(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace),
+                  CCSDS_SDLS_ERR_KEY);
+    zassert_equal(ctx.keys[5].psa_key_id, PSA_KEY_ID_NULL);
+    len = make_otar(master, 0u, ids, 1u, 0x32u, pdu);
     zassert_equal(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace),
                   CCSDS_SDLS_ERR_KEY_STATE);
     destroy_ctx_sessions(&ctx);
     zassert_equal(psa_destroy_key(master), PSA_SUCCESS);
     zassert_equal(psa_destroy_key(wrong_master), PSA_SUCCESS);
+}
+
+ZTEST(sdls_ep_otar, test_replaces_only_non_active_session_keys)
+{
+    psa_key_id_t master = import_aes_key(0x12u, 32u, PSA_ALG_GCM);
+    struct ccsds_sdls_ctx ctx;
+    uint16_t destination[] = {4u};
+    uint16_t pair[] = {4u, 5u};
+    uint8_t pdu[CCSDS_SDLS_EP_OTAR_PDU_MAX];
+    uint8_t scratch[CCSDS_SDLS_EP_PLAINTEXT_MAX];
+    struct ccsds_sdls_workspace workspace = {scratch, sizeof(scratch)};
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_key_id_t old_key;
+    size_t len;
+
+    init_master_ctx(&ctx, master, PSA_KEY_ID_NULL, false, 0u);
+    len = make_otar(master, 0u, destination, 1u, 0x40u, pdu);
+    zassert_ok(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace));
+    old_key = ctx.keys[4].psa_key_id;
+
+    len = make_otar(master, 0u, destination, 1u, 0x50u, pdu);
+    zassert_ok(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace));
+    zassert_not_equal(ctx.keys[4].psa_key_id, old_key);
+    zassert_equal(ctx.keys[4].state, CCSDS_SDLS_KEY_PREACTIVE);
+    zassert_equal(psa_get_key_attributes(old_key, &attributes),
+                  PSA_ERROR_INVALID_HANDLE);
+
+    old_key = ctx.keys[4].psa_key_id;
+    ctx.keys[4].state = CCSDS_SDLS_KEY_DEACTIVATED;
+    len = make_otar(master, 0u, destination, 1u, 0x60u, pdu);
+    zassert_ok(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace));
+    zassert_not_equal(ctx.keys[4].psa_key_id, old_key);
+    zassert_equal(ctx.keys[4].state, CCSDS_SDLS_KEY_PREACTIVE);
+    zassert_equal(psa_get_key_attributes(old_key, &attributes),
+                  PSA_ERROR_INVALID_HANDLE);
+
+    len = make_otar(master, 0u, &pair[1], 1u, 0x70u, pdu);
+    zassert_ok(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace));
+    ctx.keys[4].state = CCSDS_SDLS_KEY_DEACTIVATED;
+    ctx.keys[5].state = CCSDS_SDLS_KEY_DEACTIVATED;
+    psa_key_id_t old_pair[] = {ctx.keys[4].psa_key_id,
+                               ctx.keys[5].psa_key_id};
+
+    import_calls = 0;
+    fail_import_call = 1;
+    len = make_otar(master, 0u, pair, ARRAY_SIZE(pair), 0x80u, pdu);
+    zassert_equal(ccsds_sdls_ep_process_otar(&ctx, pdu, len, workspace),
+                  CCSDS_SDLS_ERR_PSA);
+    fail_import_call = -1;
+    zassert_equal(ctx.keys[4].psa_key_id, old_pair[0]);
+    zassert_equal(ctx.keys[5].psa_key_id, old_pair[1]);
+    zassert_equal(ctx.keys[4].state, CCSDS_SDLS_KEY_DEACTIVATED);
+    zassert_equal(ctx.keys[5].state, CCSDS_SDLS_KEY_DEACTIVATED);
+
+    destroy_ctx_sessions(&ctx);
+    zassert_equal(psa_destroy_key(master), PSA_SUCCESS);
 }
 
 ZTEST(sdls_ep_otar, test_invalid_destinations_master_attributes_and_rollback)
@@ -456,6 +602,115 @@ ZTEST(sdls_ep_lifecycle, test_atomic_activation_deactivation_and_repetition)
                   CCSDS_SDLS_ERR_KEY);
     zassert_equal(ctx.keys[4].state, CCSDS_SDLS_KEY_PREACTIVE);
     destroy_ctx_sessions(&ctx);
+    zassert_equal(psa_destroy_key(master), PSA_SUCCESS);
+}
+
+ZTEST(sdls_ep_inventory, test_fixed_table_inventory_is_authenticated_and_read_only)
+{
+    psa_key_id_t master0 = import_aes_key(0x10u, 32u, PSA_ALG_GCM);
+    psa_key_id_t master1 = import_aes_key(0x20u, 32u, PSA_ALG_GCM);
+    psa_key_id_t session4 = import_aes_key(0x40u, 32u, PSA_ALG_GCM);
+    psa_key_id_t session5 = import_aes_key(0x50u, 32u, PSA_ALG_GCM);
+    psa_key_id_t session6 = import_aes_key(0x60u, 32u, PSA_ALG_GCM);
+    struct ccsds_sdls_ctx ctx;
+    struct ccsds_sdls_ep_key_inventory_command command = {
+        .first_key_id = 0u,
+        .last_key_id = CONFIG_CCSDS_SDLS_MAX_KEYS - 1u,
+    };
+    struct ccsds_sdls_ep_key_inventory_reply decoded;
+    struct ccsds_sdls_key keys_before[CONFIG_CCSDS_SDLS_MAX_KEYS];
+    struct ccsds_sdls_sa sas_before[CONFIG_CCSDS_SDLS_MAX_SA];
+    uint8_t wire[CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_PDU_LEN];
+    uint8_t reply[CCSDS_SDLS_EP_KEY_INVENTORY_REPLY_PDU_MAX];
+    uint8_t scratch[CCSDS_SDLS_EP_WORKSPACE_MIN];
+    struct ccsds_sdls_workspace workspace = {scratch, sizeof(scratch)};
+    size_t reply_len = 0x55u;
+
+    init_master_ctx(&ctx, master0, master1, false, 0u);
+    ctx.keys[4].psa_key_id = session4;
+    ctx.keys[4].state = CCSDS_SDLS_KEY_PREACTIVE;
+    ctx.keys[5].psa_key_id = session5;
+    ctx.keys[5].state = CCSDS_SDLS_KEY_ACTIVE;
+    ctx.keys[6].psa_key_id = session6;
+    ctx.keys[6].state = CCSDS_SDLS_KEY_DEACTIVATED;
+    ccsds_sdls_ep_key_inventory_command_encode(&command, wire, sizeof(wire));
+
+    memset(reply, 0xa5, sizeof(reply));
+    zassert_equal(ccsds_sdls_ep_process_key_inventory(
+                      &ctx, wire, sizeof(wire), reply, sizeof(reply),
+                      &reply_len),
+                  CCSDS_SDLS_ERR_AUTHENTICATION);
+    zassert_equal(reply_len, 0x55u);
+    zassert_equal(reply[0], 0xa5u);
+
+    ctx.authenticated_rx_valid = true;
+    memcpy(keys_before, ctx.keys, sizeof(keys_before));
+    memcpy(sas_before, ctx.sas, sizeof(sas_before));
+    reply_len = 0x55u;
+    zassert_equal(ccsds_sdls_ep_process_key_inventory(
+                      &ctx, wire, sizeof(wire), reply, 19u, &reply_len),
+                  CCSDS_SDLS_ERR_CAPACITY);
+    zassert_equal(reply_len, 0x55u);
+    zassert_equal(reply[0], 0xa5u);
+
+    ctx.authenticated_rx_spi = 1u;
+    ctx.authenticated_rx_arsn = 42u;
+    reply_len = 0u;
+    zassert_ok(ccsds_sdls_ep_process_pdu(
+        &ctx, wire, sizeof(wire), workspace, reply, sizeof(reply), &reply_len));
+    zassert_equal(reply_len, 20u);
+    zassert_ok(ccsds_sdls_ep_key_inventory_reply_decode(reply, reply_len,
+                                                        &decoded));
+    zassert_equal(decoded.key_count, 5u);
+    zassert_equal(decoded.entries[0].key_id, 0u);
+    zassert_equal(decoded.entries[0].state, CCSDS_SDLS_KEY_ACTIVE);
+    zassert_equal(decoded.entries[1].key_id, 1u);
+    zassert_equal(decoded.entries[2].key_id, 4u);
+    zassert_equal(decoded.entries[2].state, CCSDS_SDLS_KEY_PREACTIVE);
+    zassert_equal(decoded.entries[3].key_id, 5u);
+    zassert_equal(decoded.entries[3].state, CCSDS_SDLS_KEY_ACTIVE);
+    zassert_equal(decoded.entries[4].key_id, 6u);
+    zassert_equal(decoded.entries[4].state, CCSDS_SDLS_KEY_DEACTIVATED);
+    zassert_mem_equal(ctx.keys, keys_before, sizeof(keys_before));
+    zassert_mem_equal(ctx.sas, sas_before, sizeof(sas_before));
+
+    destroy_ctx_sessions(&ctx);
+    zassert_equal(psa_destroy_key(master0), PSA_SUCCESS);
+    zassert_equal(psa_destroy_key(master1), PSA_SUCCESS);
+}
+
+ZTEST(sdls_ep_inventory, test_single_undefined_and_out_of_range_inventory)
+{
+    psa_key_id_t master = import_aes_key(0x10u, 32u, PSA_ALG_GCM);
+    struct ccsds_sdls_ctx ctx;
+    struct ccsds_sdls_ep_key_inventory_command command = {
+        .first_key_id = 7u,
+        .last_key_id = 7u,
+    };
+    struct ccsds_sdls_ep_key_inventory_reply decoded;
+    uint8_t wire[CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_PDU_LEN];
+    uint8_t reply[CCSDS_SDLS_EP_KEY_INVENTORY_REPLY_PDU_MAX];
+    size_t reply_len = 0u;
+
+    init_master_ctx(&ctx, master, PSA_KEY_ID_NULL, false, 0u);
+    ctx.authenticated_rx_valid = true;
+    ccsds_sdls_ep_key_inventory_command_encode(&command, wire, sizeof(wire));
+    zassert_ok(ccsds_sdls_ep_process_key_inventory(
+        &ctx, wire, sizeof(wire), reply, sizeof(reply), &reply_len));
+    zassert_equal(reply_len, 5u);
+    zassert_ok(ccsds_sdls_ep_key_inventory_reply_decode(reply, reply_len,
+                                                        &decoded));
+    zassert_equal(decoded.key_count, 0u);
+
+    command.first_key_id = CONFIG_CCSDS_SDLS_MAX_KEYS;
+    command.last_key_id = CONFIG_CCSDS_SDLS_MAX_KEYS;
+    ccsds_sdls_ep_key_inventory_command_encode(&command, wire, sizeof(wire));
+    reply_len = 0x55u;
+    zassert_equal(ccsds_sdls_ep_process_key_inventory(
+                      &ctx, wire, sizeof(wire), reply, sizeof(reply),
+                      &reply_len),
+                  CCSDS_SDLS_ERR_KEY);
+    zassert_equal(reply_len, 0x55u);
     zassert_equal(psa_destroy_key(master), PSA_SUCCESS);
 }
 
@@ -636,5 +891,6 @@ static void *sdls_ep_setup(void)
 ZTEST_SUITE(sdls_ep_codec, NULL, sdls_ep_setup, NULL, NULL, NULL);
 ZTEST_SUITE(sdls_ep_otar, NULL, sdls_ep_setup, NULL, NULL, NULL);
 ZTEST_SUITE(sdls_ep_lifecycle, NULL, sdls_ep_setup, NULL, NULL, NULL);
+ZTEST_SUITE(sdls_ep_inventory, NULL, sdls_ep_setup, NULL, NULL, NULL);
 ZTEST_SUITE(sdls_ep_rollover, NULL, sdls_ep_setup, NULL, NULL, NULL);
 ZTEST_SUITE(sdls_ep_verification, NULL, sdls_ep_setup, NULL, NULL, NULL);

@@ -200,7 +200,7 @@ config CCSDS_SDLS_SESSION_KEY_BASE
 	default 4
 	range 1 254
 	help
-      Key identifiers below this value address pre-provisioned slots. Key
+	  Key identifiers below this value address OTAR master-key slots. Key
 	  identifiers from this value through CCSDS_SDLS_MAX_KEYS - 1 address
 	  session-key slots. This value must be less than CCSDS_SDLS_MAX_KEYS.
 

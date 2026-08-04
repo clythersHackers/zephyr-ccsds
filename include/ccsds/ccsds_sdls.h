@@ -35,6 +35,8 @@ extern "C" {
     (2u + CCSDS_SDLS_EP_CHALLENGE_LEN)
 #define CCSDS_SDLS_EP_VERIFY_REPLY_ENTRY_LEN                                   \
     (2u + CCSDS_SDLS_IV_LEN + CCSDS_SDLS_EP_CHALLENGE_LEN + CCSDS_SDLS_TAG_LEN)
+#define CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_DATA_LEN 4u
+#define CCSDS_SDLS_EP_KEY_INVENTORY_ENTRY_LEN 3u
 #define CCSDS_SDLS_EP_MAX_OTAR_KEYS                                            \
     (CONFIG_CCSDS_SDLS_MAX_KEYS - CONFIG_CCSDS_SDLS_SESSION_KEY_BASE)
 #define CCSDS_SDLS_EP_MAX_RECIPIENTS CONFIG_CCSDS_SDLS_MAX_KEYS
@@ -52,6 +54,11 @@ extern "C" {
 #define CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX                                     \
     (CCSDS_SDLS_EP_HEADER_LEN +                                                \
      CCSDS_SDLS_EP_VERIFY_REPLY_ENTRY_LEN * CCSDS_SDLS_EP_MAX_RECIPIENTS)
+#define CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_PDU_LEN                            \
+    (CCSDS_SDLS_EP_HEADER_LEN + CCSDS_SDLS_EP_KEY_INVENTORY_COMMAND_DATA_LEN)
+#define CCSDS_SDLS_EP_KEY_INVENTORY_REPLY_PDU_MAX                              \
+    (CCSDS_SDLS_EP_HEADER_LEN + 2u +                                           \
+     CCSDS_SDLS_EP_KEY_INVENTORY_ENTRY_LEN * CCSDS_SDLS_EP_MAX_RECIPIENTS)
 #define CCSDS_SDLS_EP_PLAINTEXT_MAX                                            \
     (CCSDS_SDLS_EP_MAX_OTAR_KEYS * CCSDS_SDLS_EP_OTAR_BLOCK_LEN)
 #define CCSDS_SDLS_EP_WORKSPACE_MIN                                            \
@@ -67,7 +74,9 @@ extern "C" {
     (CCSDS_SDLS_EP_HEADER_LEN +                                             \
      CONFIG_CCSDS_SDLS_EVENT_LOG_CAPACITY * CCSDS_SDLS_EVENT_WIRE_LEN)
 #define CCSDS_SDLS_EP_REPLY_PDU_MAX                                         \
-    MAX(CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX, CCSDS_SDLS_EP_DUMP_LOG_PDU_MAX)
+    MAX(MAX(CCSDS_SDLS_EP_VERIFY_REPLY_PDU_MAX,                              \
+            CCSDS_SDLS_EP_KEY_INVENTORY_REPLY_PDU_MAX),                     \
+        CCSDS_SDLS_EP_DUMP_LOG_PDU_MAX)
 #define CCSDS_SDLS_FSR_LEN 4u
 #define CCSDS_SDLS_FSR_VERSION 4u
 
@@ -113,6 +122,7 @@ enum ccsds_sdls_ep_procedure {
     CCSDS_SDLS_EP_KEY_ACTIVATION = 2,
     CCSDS_SDLS_EP_KEY_DEACTIVATION = 3,
     CCSDS_SDLS_EP_KEY_VERIFICATION = 4,
+    CCSDS_SDLS_EP_KEY_INVENTORY = 7,
 };
 
 enum ccsds_sdls_ep_service_group {
@@ -346,6 +356,22 @@ struct ccsds_sdls_ep_key_command {
     size_t key_count;
 };
 
+struct ccsds_sdls_ep_key_inventory_command {
+    uint16_t first_key_id;
+    uint16_t last_key_id;
+};
+
+struct ccsds_sdls_ep_key_inventory_entry {
+    uint16_t key_id;
+    uint8_t state;
+};
+
+struct ccsds_sdls_ep_key_inventory_reply {
+    struct ccsds_sdls_ep_key_inventory_entry
+        entries[CCSDS_SDLS_EP_MAX_RECIPIENTS];
+    size_t key_count;
+};
+
 struct ccsds_sdls_ep_verify_command_entry {
     uint8_t challenge[CCSDS_SDLS_EP_CHALLENGE_LEN];
     uint16_t key_id;
@@ -374,7 +400,6 @@ struct ccsds_sdls_ep_verify_reply {
 struct ccsds_sdls_ctx {
     struct ccsds_sdls_sa sas[CONFIG_CCSDS_SDLS_MAX_SA];
     struct ccsds_sdls_key keys[CONFIG_CCSDS_SDLS_MAX_KEYS];
-    bool otar_master_allowed[CONFIG_CCSDS_SDLS_MAX_KEYS];
     uint8_t sa_roles[CONFIG_CCSDS_SDLS_MAX_SA];
     uint8_t sa_modes[CONFIG_CCSDS_SDLS_MAX_SA];
     uint64_t tx_iv;
@@ -570,6 +595,18 @@ int ccsds_sdls_ep_key_command_decode(
     const uint8_t *encoded, size_t encoded_len,
     enum ccsds_sdls_ep_procedure expected_procedure,
     struct ccsds_sdls_ep_key_command *command);
+void ccsds_sdls_ep_key_inventory_command_encode(
+    const struct ccsds_sdls_ep_key_inventory_command *command, uint8_t *out,
+    size_t out_capacity);
+int ccsds_sdls_ep_key_inventory_command_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_key_inventory_command *command);
+int ccsds_sdls_ep_key_inventory_reply_encode(
+    const struct ccsds_sdls_ep_key_inventory_reply *reply, uint8_t *out,
+    size_t out_capacity, size_t *out_len);
+int ccsds_sdls_ep_key_inventory_reply_decode(
+    const uint8_t *encoded, size_t encoded_len,
+    struct ccsds_sdls_ep_key_inventory_reply *reply);
 void ccsds_sdls_ep_verify_command_encode(
     const struct ccsds_sdls_ep_verify_command *command, uint8_t *out,
     size_t out_capacity);
@@ -592,6 +629,9 @@ int ccsds_sdls_ep_process_key_activation(struct ccsds_sdls_ctx *ctx,
 int ccsds_sdls_ep_process_key_deactivation(struct ccsds_sdls_ctx *ctx,
                                            const uint8_t *encoded,
                                            size_t encoded_len);
+int ccsds_sdls_ep_process_key_inventory(
+    struct ccsds_sdls_ctx *ctx, const uint8_t *encoded, size_t encoded_len,
+    uint8_t *reply, size_t reply_capacity, size_t *reply_len);
 int ccsds_sdls_ep_process_key_verification(
     struct ccsds_sdls_ctx *ctx, const uint8_t *encoded, size_t encoded_len,
     struct ccsds_sdls_workspace workspace, uint8_t *reply,
@@ -629,9 +669,6 @@ int ccsds_sdls_ep_process_alarm_flag_reset(struct ccsds_sdls_ctx *ctx,
 void ccsds_sdls_set_self_test(struct ccsds_sdls_ctx *ctx,
                               ccsds_sdls_self_test_cb_t callback,
                               void *user_data);
-/** Allow or deny one configured key as an OTAR authentication key. */
-void ccsds_sdls_set_otar_master_allowed(struct ccsds_sdls_ctx *ctx,
-                                        uint16_t key_id, bool allowed);
 void ccsds_sdls_event_record(struct ccsds_sdls_ctx *ctx, uint8_t tag,
                              enum ccsds_sdls_event_code code, uint16_t spi,
                              uint32_t arsn);
