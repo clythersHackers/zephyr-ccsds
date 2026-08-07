@@ -1,7 +1,55 @@
 # zephyr-ccsds
 
 `zephyr-ccsds` is a standalone Zephyr module providing reusable CCSDS packet,
-routing, transfer-frame, channel-coding, UDP adaptation, and CFDP components.
+routing, transfer-frame & channel-coding. It also provides:
+
+- CFDP file transfer 
+- SDLS authentication & encryption in both TM & TC using GCM&GMAC
+- SDLS EP key management
+
+It provides a UDP adapter for demo purposes.
+
+## Why this is Interesting
+
+`zephyr-ccsds` provides a selectively complete classic CCSDS protocol implementation targeted natively
+to Zephyr RTOS, allowing deployment to extreme resource-constrained platforms such as MCU; for
+example STM32-based microcontrollers are widely used in micro- and nanosatellites in low-earth-orbit.
+
+The project is intended for spacecraft flight software, payload processors, intelligent instruments and 
+ground-based simulation environments that require CCSDS communications without imposing a complete framework.
+
+Zephyr is increasingly being adopted for embedded systems requiring a richer driver ecosystem, modern 
+tooling and broader hardware support than is typically associated with traditional embedded RTOSes.
+Work is underway within the Zephyr community to support safety-oriented use cases.
+
+The implemented CCSDS subset is intentionally "traditional", i.e. it does not attempt to tunnel IP protocols
+over CCSDS, uses CFDP for file transfer and SLDS & EP for security. This is with a view to interoperability 
+with existing ground systems, modems, transponders and operational practices used throughout the CCSDS ecosystem. 
+
+There is no DTN, no BPSEC. It does not (for now) support USLP, although it may be added in future.
+
+The implementation intentionally avoids providing a complete flight software framework. Instead it provides 
+reusable communications components that integrate naturally into Zephyr applications as a library. This allows missions
+to design & format packet contents as they choose.
+
+Lower-level decoding and encoding tasks are compile-time optional, since 
+they may be supported by external hardware units (or deployed across multiple MCU). 
+Cryptography uses the PSA API, which will use hardware assistance if available.
+
+Obviously, the more you do in software, the lower the data rate you can support in a low-end MCU.
+
+In comparison with CSP (widely used on cubesats), CCSDS offers more standardisation 
+& safety e.g. error correction, flow control, authentication & encryption & file transfer. In CSP,
+the core standard protocols only cover the packet format; everything else is proprietary. 
+
+
+
+CCSDS remains the dominant interoperability standard for institutional space missions and 
+provides the broadest ecosystem of interoperable communications infrastructure currently available.
+
+
+## Deployment
+
 Zephyr applications consume it through standard module discovery and select
 the required protocol components through Kconfig.
 
@@ -16,7 +64,7 @@ CMake integration, tests, samples, and application-facing callback boundaries.
 Applications retain ownership of endpoints, device drivers, filesystem layout,
 mission policy, security policy, and lifecycle behavior.
 
-The included UDP adapter provides one ready-to-use transport. The callback
+The included UDP adapter provides a ready-to-use transport. The callback
 boundaries also allow consuming applications to connect other transports,
 such as serial/UART, TWAI/CAN, Bluetooth LE, or radio, without changing the
 CCSDS protocol implementation. Adapters for those transports are not currently
@@ -26,21 +74,19 @@ included in this repository.
 
 - CCSDS Space Packet encode/decode and APID routing.
 - TC transfer-frame and segment decode, complete-CLTU decode, BCH correction,
-  bounded packet reassembly, and a single-VC spacecraft receive profile
-  covering sequence acceptance, lockout/retransmit state, UNLOCK and SET V(R),
-  FARM-B counting, and CLCW generation.
+  packet reassembly.
+- A single-VC spacecraft receive profile covering sequence acceptance, 
+  lockout/retransmit state, UNLOCK and SET V(R), FARM-B counting, and CLCW generation.
 - TM transfer-frame generation, per-VC packet queues and routes, CLCW
   insertion, optional FECF, randomization, and Reed-Solomon coding.
-- Caller-owned bounded-unit UDP adapter.
 - CFDP PDU codecs, checksums, filestore/UT callback boundaries, Class 1
-  closure, bounded missing-range recovery, Space Packet adaptation, and
+  closure, missing-range recovery, Space Packet adaptation, and
   reusable service composition.
 - SDLS fixed-profile AES-256-GCM/GMAC wire processing, predefined-SA and key
-  management, selected Extended Procedures, FSR, and bounded monitoring.
+  management by Extended Procedures, FSR generation, and bounded monitoring.
 
-This is an intentionally bounded embedded subset, not an implementation of
-every CCSDS service or option. See the [documentation index](doc/index.md) for detailed
-behavior, configuration, ownership, and limitations.
+See the [documentation index](doc/index.md) for detailed
+behaviour, configuration, ownership, and limitations.
 
 ## Requirements
 
