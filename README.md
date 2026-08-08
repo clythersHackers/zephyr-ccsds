@@ -39,14 +39,10 @@ Cryptography uses the PSA API, which will use hardware assistance if available.
 Obviously, the more you do in software, the lower the data rate you can support in a low-end MCU.
 
 In comparison with CSP (widely used on cubesats), CCSDS offers more standardisation 
-& safety e.g. error correction, flow control, authentication & encryption & file transfer. In CSP,
-the core standard protocols only cover the packet format; everything else is proprietary. 
-
-
+& safety e.g. error correction, flow control, authentication & encryption & file transfer. In CSP, the open standard protocols only cover the packet format; everything else is proprietary. 
 
 CCSDS remains the dominant interoperability standard for institutional space missions and 
-provides the broadest ecosystem of interoperable communications infrastructure currently available.
-
+provides the broadest ecosystem of interoperable communications infrastructure currently available. The standards are openly published.
 
 ## Deployment
 
@@ -80,10 +76,9 @@ included in this repository.
 - TM transfer-frame generation, per-VC packet queues and routes, CLCW
   insertion, optional FECF, randomization, and Reed-Solomon coding.
 - CFDP PDU codecs, checksums, filestore/UT callback boundaries, Class 1
-  closure, missing-range recovery, Space Packet adaptation, and
-  reusable service composition.
+  closure, missing-range recovery.
 - SDLS fixed-profile AES-256-GCM/GMAC wire processing, predefined-SA and key
-  management by Extended Procedures, FSR generation, and bounded monitoring.
+  management by Extended Procedures, FSR generation.
 
 See the [documentation index](doc/index.md) for detailed
 behaviour, configuration, ownership, and limitations.
