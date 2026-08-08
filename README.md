@@ -26,7 +26,7 @@ The implemented CCSDS subset is intentionally "traditional", i.e. it does not at
 over CCSDS, uses CFDP for file transfer and SLDS & EP for security. This is with a view to interoperability 
 with existing ground systems, modems, transponders and operational practices used throughout the CCSDS ecosystem. 
 
-There is no DTN, no BPSEC. It does not (for now) support USLP, although it may be added in future.
+There is no DTN, no BP or BPSEC. It does not (for now) support USLP, although it may be added in future.
 
 The implementation intentionally avoids providing a complete flight software framework. Instead it provides 
 reusable communications components that integrate naturally into Zephyr applications as a library. This allows missions
@@ -38,11 +38,38 @@ Cryptography uses the PSA API, which will use hardware assistance if available.
 
 Obviously, the more you do in software, the lower the data rate you can support in a low-end MCU.
 
-In comparison with CSP (widely used on cubesats), CCSDS offers more standardisation 
-& safety e.g. error correction, flow control, authentication & encryption & file transfer. In CSP, the open standard protocols only cover the packet format; everything else is proprietary. 
+In comparison with CSP (widely used on cubesats), CCSDS offers more standardisation & safety 
+e.g. error correction, flow control, authentication & encryption & file transfer. 
+In CSP, the open standard protocols only cover the packet format; everything else is proprietary. 
 
 CCSDS remains the dominant interoperability standard for institutional space missions and 
 provides the broadest ecosystem of interoperable communications infrastructure currently available. The standards are openly published.
+
+```mermaid
+flowchart TB
+    APP["Mission / Payload Application"]
+
+    subgraph ZC["zephyr-ccsds"]
+        CFDP["CFDP<br/>File Transfer"]
+        SP["Space Packets"]
+        SDLS["SDLS + EP<br/>Authentication • Encryption • Keys"]
+        TF["TM / TC Transfer Frames & COP1"]
+        CODING["Channel Coding BCH & R-S"]
+
+        CFDP --> SP
+        SP --> TF
+        SDLS --> TF
+        TF --> CODING
+    end
+
+    ZEPHYR["Zephyr RTOS<br/>PSA Crypto • Networking • Drivers"]
+    HW["Radio / Modem / UDP Demo Adapter"]
+
+    APP --> CFDP
+    APP --> SP
+    CODING --> ZEPHYR
+    ZEPHYR --> HW
+```
 
 ## Deployment
 
